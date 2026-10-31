@@ -40,7 +40,9 @@ export function AppShell() {
                   {user.full_name}
                 </span>
                 <Button asChild variant="ghost">
-                  <Link to="/account">My account</Link>
+                  <Link to={user.role === "donor" ? "/dashboard" : "/account"}>
+                    {user.role === "donor" ? "Dashboard" : "My account"}
+                  </Link>
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleLogout}>
                   <LogOut aria-hidden /> Log out

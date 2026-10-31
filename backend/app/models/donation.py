@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.common import created_at_column, new_uuid, updated_at_column
 from app.models.base import Base
@@ -129,6 +129,13 @@ class Donation(Base):
     created_at: Mapped[created_at_column] = created_at_column()  # type: ignore[valid-type]
     updated_at: Mapped[updated_at_column] = updated_at_column()  # type: ignore[valid-type]
 
+    # Relationships (serialization convenience only — no new columns).
+    category: Mapped["DonationCategory"] = relationship()
+    subcategory: Mapped["DonationSubcategory | None"] = relationship()
+    images: Mapped[list["DonationImage"]] = relationship(
+        back_populates="donation", order_by="DonationImage.position"
+    )
+
 
 class DonationImage(Base):
     __tablename__ = "donation_images"
@@ -137,6 +144,7 @@ class DonationImage(Base):
     donation_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("donations.id"), nullable=False
     )
+    donation: Mapped["Donation"] = relationship(back_populates="images")
     stored_path: Mapped[str] = mapped_column(String(255), nullable=False)
     original_filename_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(40), nullable=False)

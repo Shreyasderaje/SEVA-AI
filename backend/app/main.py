@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import admin, auth, health
+from app.api import admin, auth, categories, classify, donations, health, images
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
 
@@ -72,6 +72,10 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(admin.router)
+    app.include_router(categories.router)
+    app.include_router(donations.router)
+    app.include_router(images.router)
+    app.include_router(classify.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):

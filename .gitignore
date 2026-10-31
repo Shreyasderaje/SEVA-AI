@@ -21,6 +21,7 @@ coverage/
 # Uploads / generated files
 backend/storage/*
 !backend/storage/.gitkeep
+backend/test_storage/
 
 # ML artifacts (never commit model weights or consented data)
 ml/data/raw/*

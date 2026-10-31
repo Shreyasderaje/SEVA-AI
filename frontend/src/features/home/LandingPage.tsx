@@ -1,4 +1,5 @@
 import {
+  Boxes,
   ClipboardList,
   Handshake,
   Package,
@@ -7,12 +8,12 @@ import {
   Truck,
   Utensils,
   Wheat,
-  Boxes,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/features/auth/auth-context";
 
 const STEPS = [
   {
@@ -46,6 +47,9 @@ const CATEGORIES = [
 ];
 
 export function LandingPage() {
+  const { user } = useAuth();
+  const donateTarget = user?.role === "donor" ? "/donations/new" : "/register";
+
   return (
     <div className="flex flex-col gap-16">
       {/* Hero */}
@@ -65,7 +69,7 @@ export function LandingPage() {
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Button asChild size="lg">
-              <Link to="/register">Donate items</Link>
+              <Link to={donateTarget}>Donate items</Link>
             </Button>
             <Button asChild size="lg" variant="outline">
               <Link to="/login">Sign in</Link>

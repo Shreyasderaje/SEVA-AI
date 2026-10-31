@@ -1,0 +1,16 @@
+# ML pipeline dependencies — install separately from the backend.
+#
+#   python -m venv ml/.venv && source ml/.venv/Scripts/activate
+#   pip install -r ml/requirements.txt
+#
+# CPU-only PyTorch keeps the download small; on Windows/Git Bash:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# (the block below installs the default build; use the line above for CPU-only)
+
+torch>=2.4
+torchvision>=0.19
+scikit-learn>=1.5
+numpy>=1.26
+pillow>=10.4
+matplotlib>=3.9
+pandas>=2.2

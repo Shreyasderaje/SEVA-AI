@@ -41,16 +41,18 @@ interface ApiFetchOptions {
   body?: unknown;
   /** Attach the stored bearer token (default true). */
   auth?: boolean;
+  /** Send `body` as-is (FormData) instead of JSON-encoding it. */
+  json?: boolean;
 }
 
 export async function apiFetch<T>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, auth = true } = options;
+  const { method = "GET", body, auth = true, json = true } = options;
 
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (body !== undefined && json) headers["Content-Type"] = "application/json";
   if (auth) {
     const token = getStoredToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
