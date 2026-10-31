@@ -1,33 +1,47 @@
-"""Prepare the SEVA-AI image dataset: validate, resize, label, split.
+"""Prepare the SEVA-AI image dataset (Stage 1: public licensed datasets).
 
-Reads consented images from `ml/data/raw/<source-group>/<label>/*.jpg`, writes
-resized copies and `labels.csv` into `ml/data/processed/`. See
-`ml/data/README.md` for the consent rules, directory layout, and CSV schema.
+Reads images from `ml/data/raw/<source_group>/<class>/*` (source groups
+declared in `ml/data/raw/datasets.csv`), then:
 
-Guarantees:
-- Labels are validated against the five fixed classes; anything else fails loudly.
-- Splits are stratified by label and grouped by source (all images from one
-  photo session stay in the same split) with a fixed random seed (42).
-- An existing `labels.csv` is never overwritten silently (`--force` required).
-- The script prints split sizes and warns when a class has fewer than
-  MIN_TEST_IMAGES_PER_CLASS test images (the evaluation report must repeat it).
+1. Validates labels against the five fixed classes and validates licence
+   metadata (public_licensed requires source+licence; consented_original
+   requires a consent_ref — enforced so future ashram-collected data cannot
+   enter the pipeline undocumented).
+2. Removes exact duplicates (SHA-256 of file bytes).
+3. Groups near-duplicates (64-bit average hash, Hamming distance ≤ 6) with a
+   union-find so crops/rotations of the same photo never leak across splits.
+4. Assigns reproducible train/val/test splits stratified by class, grouped by
+   duplicate group, seed 42, never regenerated silently (`--force`).
+5. Balances classes by deterministically dropping whole duplicate groups (and
+   only then single images) above the per-split caps.
+6. Writes resized/metadata-stripped copies to `ml/data/processed/`, the new
+   `labels.csv`, and a distribution report (JSON + PNG) to `ml/reports/`.
 
-CLI:  python ml/src/prepare_dataset.py [--force]
+labels.csv columns:
+    image_path,label,source,source_url,licence,dataset_type,consent_ref,annotator,split
+
+Run:  ml/.venv/Scripts/python.exe ml/src/prepare_dataset.py [--force] \
+        [--max-train-per-class 1100] [--max-val-per-class 220] [--max-test-per-class 220]
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import random
 import sys
 from collections import defaultdict
 from pathlib import Path
 
+from PIL import Image
+
 ML_DIR = Path(__file__).resolve().parents[1]
 RAW_DIR = ML_DIR / "data" / "raw"
 PROCESSED_DIR = ML_DIR / "data" / "processed"
-CONSENT_CSV = RAW_DIR / "consent.csv"
+REPORTS_DIR = ML_DIR / "reports"
+REGISTRY_PATH = RAW_DIR / "datasets.csv"
 
 LABELS: tuple[str, ...] = (
     "clothing",
@@ -38,137 +52,385 @@ LABELS: tuple[str, ...] = (
 )
 SEED = 42
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-MAX_DIMENSION = 1024
 TRAIN_FRAC, VAL_FRAC, TEST_FRAC = 0.70, 0.15, 0.15
-MIN_TEST_IMAGES_PER_CLASS = 20  # below this, the evaluation report must say so
+MIN_TEST_IMAGES_PER_CLASS = 20
+NEAR_DUP_HAMMING = 4
+NEAR_DUP_WINDOW = 50
+# A single near-duplicate group holding more than this fraction of a class is
+# dissolved into singletons before splitting (otherwise one augmented family
+# would put an entire class into one split). Logged as a limitation.
+OVERSIZED_GROUP_FRACTION = 0.25
+MAX_DIMENSION = 1024
+MIN_SIDE = 32
+LABELS_CSV_FIELDS = [
+    "image_path",
+    "label",
+    "source",
+    "source_url",
+    "licence",
+    "dataset_type",
+    "consent_ref",
+    "annotator",
+    "split",
+]
 
 
-def read_consent() -> dict[str, dict[str, str]]:
-    if not CONSENT_CSV.is_file():
-        sys.exit(
-            f"error: {CONSENT_CSV} is missing. Every source group needs a consent "
-            "reference — see ml/data/README.md."
-        )
-    consent: dict[str, dict[str, str]] = {}
-    with CONSENT_CSV.open(newline="", encoding="utf-8") as handle:
+class UnionFind:
+    def __init__(self) -> None:
+        self.parent: dict[int, int] = {}
+
+    def find(self, item: int) -> int:
+        self.parent.setdefault(item, item)
+        while self.parent[item] != item:
+            self.parent[item] = self.parent[self.parent[item]]
+            item = self.parent[item]
+        return item
+
+    def union(self, a: int, b: int) -> None:
+        root_a, root_b = self.find(a), self.find(b)
+        if root_a != root_b:
+            self.parent[root_b] = root_a
+
+
+def read_registry() -> dict[str, dict[str, str]]:
+    if not REGISTRY_PATH.is_file():
+        sys.exit(f"error: dataset registry not found: {REGISTRY_PATH}")
+    registry: dict[str, dict[str, str]] = {}
+    with REGISTRY_PATH.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             group = (row.get("source_group") or "").strip()
-            ref = (row.get("consent_ref") or "").strip()
-            if not group or not ref:
-                sys.exit("error: consent.csv rows need source_group and consent_ref")
-            consent[group] = {
-                "consent_ref": ref,
-                "annotator": (row.get("notes") or "unspecified").strip() or "unspecified",
+            if not group:
+                continue
+            registry[group] = {
+                key: (row.get(key) or "").strip()
+                for key in (
+                    "dataset_type",
+                    "source",
+                    "source_url",
+                    "licence",
+                    "consent_ref",
+                    "annotator",
+                    "label_mapping",
+                )
             }
-    return consent
+    return registry
 
 
-def collect_images(consent: dict[str, dict[str, str]]) -> list[dict[str, str]]:
-    """Walk raw/<source-group>/<label>/* and validate everything."""
-    records: list[dict[str, str]] = []
-    if not RAW_DIR.is_dir():
-        sys.exit(f"error: raw data directory not found: {RAW_DIR}")
+def resolve_label(group: dict[str, str], folder: str) -> str | None:
+    """Map a raw subfolder to a SEVA class via the registry's label_mapping
+    (comma-separated `folder=class` rules; `*=class` maps every folder).
+    Without a mapping the folder name must already be a fixed class."""
+    mapping = group.get("label_mapping") or ""
+    for rule in (part.strip() for part in mapping.split(",") if part.strip()):
+        if "=" not in rule:
+            continue
+        raw_folder, seva_class = (piece.strip() for piece in rule.split("=", 1))
+        if seva_class not in LABELS:
+            sys.exit(f"error: label_mapping rule '{rule}' targets an unknown class")
+        if raw_folder == "*" or raw_folder.lower() == folder.lower():
+            return seva_class
+    return folder if folder in LABELS else None
 
+
+def read_sidecar(group_dir: Path) -> dict[str, dict[str, str]]:
+    """Per-image attribution override from a source-group _attribution.csv."""
+    sidecar = group_dir / "_attribution.csv"
+    overrides: dict[str, dict[str, str]] = {}
+    if not sidecar.is_file():
+        return overrides
+    with sidecar.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            key = (row.get("filename") or "").replace("\\", "/").strip()
+            if key:
+                overrides[key] = {
+                    "licence": (row.get("licence") or "").strip(),
+                    "artist": (row.get("artist") or row.get("photographer") or "").strip(),
+                    "source_url": (row.get("source_url") or "").strip(),
+                }
+    return overrides
+
+
+def collect_images(registry: dict[str, dict[str, str]]) -> tuple[list[dict], list[dict]]:
+    records: list[dict] = []
+    excluded: list[dict] = []
     for group_dir in sorted(p for p in RAW_DIR.iterdir() if p.is_dir()):
         group = group_dir.name
-        if group not in consent:
+        if group == "_downloads" or group not in registry:
+            continue
+        meta = registry[group]
+        dataset_type = meta["dataset_type"]
+        if dataset_type not in ("public_licensed", "consented_original"):
+            sys.exit(f"error: '{group}' has unknown dataset_type '{dataset_type}'")
+        if dataset_type == "public_licensed" and (not meta["source"] or not meta["licence"]):
+            sys.exit(f"error: public_licensed source '{group}' needs source and licence")
+        if dataset_type == "consented_original" and not meta["consent_ref"]:
             sys.exit(
-                f"error: source group '{group}' has no consent reference in consent.csv"
+                f"error: consented_original source '{group}' needs a consent_ref — "
+                "real-world images must never enter the pipeline undocumented."
             )
-        for label_dir in sorted(p for p in group_dir.iterdir() if p.is_dir()):
-            label = label_dir.name
-            if label not in LABELS:
+        overrides = read_sidecar(group_dir)
+        for class_dir in sorted(p for p in group_dir.iterdir() if p.is_dir()):
+            folder = class_dir.name
+            if folder.startswith("_"):
+                continue
+            label = resolve_label(meta, folder)
+            if label is None:
                 sys.exit(
-                    f"error: '{label}' in {group_dir} is not one of the fixed classes "
-                    f"{LABELS}. Fix the folder name — never relabel silently."
+                    f"error: '{folder}' in {group_dir} does not map to one of the fixed "
+                    f"classes {LABELS}. Add a label_mapping rule in datasets.csv first."
                 )
-            for image_path in sorted(label_dir.iterdir()):
+            for image_path in sorted(class_dir.iterdir()):
                 if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
                     continue
+                relative = f"{label}/{image_path.name}".replace("\\", "/")
+                override = overrides.get(relative, {})
+                licence = override.get("licence") or meta["licence"]
+                if not licence:
+                    excluded.append({"path": str(image_path), "reason": "no licence documented"})
+                    continue
+                source_url = override.get("source_url") or meta["source_url"]
                 records.append(
                     {
-                        "raw_path": str(image_path),
+                        "path": image_path,
                         "label": label,
-                        "source": group,
-                        "consent_ref": consent[group]["consent_ref"],
-                        "annotator": consent[group]["annotator"],
+                        "source_group": group,
+                        "source": meta["source"],
+                        "source_url": source_url,
+                        "licence": licence,
+                        "dataset_type": dataset_type,
+                        "consent_ref": meta["consent_ref"],
+                        "annotator": override.get("artist") or meta["annotator"] or "unspecified",
                     }
                 )
-    return records
+    return records, excluded
 
 
-def make_splits(
-    records: list[dict[str, str]],
-) -> dict[str, list[dict[str, str]]]:
-    """Stratified by label, grouped by source, deterministic (seed 42).
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    Whole source groups are assigned to one split together so images from the
-    same photo session never leak across splits. Every label that has at least
-    three groups gets images in all three splits; smaller labels degrade
-    gracefully and the warning in main() reports the shortfall.
-    """
+
+def average_hash(path: Path) -> int | None:
+    """64-bit average hash (8x8 grayscale) — cheap near-duplicate detection."""
+    try:
+        with Image.open(path) as image:
+            image = image.convert("L").resize((8, 8))
+            pixels = list(image.getdata())
+    except Exception:  # noqa: BLE001 — corrupt images are excluded, not fatal
+        return None
+    if min(pixels) == max(pixels):
+        return 0
+    mean = sum(pixels) / len(pixels)
+    bits = 0
+    for pixel in pixels:
+        bits = (bits << 1) | (1 if pixel > mean else 0)
+    return bits
+
+
+def hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def pre_sample(records: list[dict], cap: int) -> tuple[list[dict], int]:
+    """Deterministically cap each (class, source_group) bucket before the
+    expensive near-duplicate analysis. Diversity within very large sources is
+    high, so this keeps the pipeline tractable without losing class coverage."""
     rng = random.Random(SEED)
-
-    buckets: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for record in records:
-        buckets[(record["label"], record["source"])].append(record)
+        buckets[(record["label"], record["source_group"])].append(record)
 
-    per_label: dict[str, list[tuple[str, int]]] = defaultdict(list)
-    for (label, source) in sorted(buckets):
-        per_label[label].append((source, len(buckets[(label, source)])))
+    kept: list[dict] = []
+    dropped = 0
+    for (label, group), items in sorted(buckets.items()):
+        if len(items) <= cap:
+            kept.extend(items)
+            continue
+        items = sorted(items, key=lambda r: str(r["path"]))
+        rng.shuffle(items)
+        kept.extend(items[:cap])
+        dropped += len(items) - cap
+    return kept, dropped
 
-    split_of: dict[tuple[str, str], str] = {}
-    for label in sorted(per_label):
-        groups = list(per_label[label])
-        total = sum(size for _, size in groups)
+
+def deduplicate(records: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    """Exact (sha256) + near (average-hash) dedup; returns kept records with a
+    `dup_group` id each, plus statistics."""
+    seen_hashes: dict[str, str] = {}
+    kept: list[dict] = []
+    exact_removed = 0
+
+    for record in sorted(records, key=lambda r: str(r["path"])):
+        digest = sha256_of(record["path"])
+        if digest in seen_hashes:
+            exact_removed += 1
+            continue
+        seen_hashes[digest] = str(record["path"])
+        record["sha256"] = digest
+        kept.append(record)
+
+    # Near-duplicate grouping within each class.
+    union = UnionFind()
+    per_label: dict[str, list[int]] = defaultdict(list)
+    for index, record in enumerate(kept):
+        record["_ahash"] = average_hash(record["path"])
+        per_label[record["label"]].append(index)
+
+    kept = [r for r in kept if r["_ahash"] is not None]
+    per_label = defaultdict(list)
+    for index, record in enumerate(kept):
+        per_label[record["label"]].append(index)
+
+    near_removed_groups = 0
+    for label, indexes in per_label.items():
+        indexed = sorted(indexes, key=lambda i: kept[i]["_ahash"])
+        for position, index in enumerate(indexed):
+            for neighbor in indexed[position + 1 : position + 1 + NEAR_DUP_WINDOW]:
+                if hamming(kept[index]["_ahash"], kept[neighbor]["_ahash"]) <= NEAR_DUP_HAMMING:
+                    union.union(index, neighbor)
+
+    groups: dict[int, int] = {}
+    for index in range(len(kept)):
+        root = union.find(index)
+        groups.setdefault(root, len(groups))
+        kept[index]["dup_group"] = f"{kept[index]['label']}:{groups[root]}"
+
+    seen_group_names: set[str] = set()
+    for record in kept:
+        if record["dup_group"] in seen_group_names:
+            pass
+        seen_group_names.add(record["dup_group"])
+    # Groups that lost all but one member still count as merged duplicates.
+    merged_members: dict[str, int] = defaultdict(int)
+    for record in kept:
+        merged_members[record["dup_group"]] += 1
+    near_removed_groups = sum(1 for size in merged_members.values() if size > 1)
+
+    stats = {
+        "exact_duplicates_removed": exact_removed,
+        "near_duplicate_groups": near_removed_groups,
+        "kept": len(kept),
+    }
+    return kept, stats
+
+
+def dissolve_oversized_groups(records: list[dict]) -> int:
+    """Split near-duplicate groups that dominate a class into singletons so the
+    grouped split still covers all three splits. Returns the number of groups
+    dissolved. Logged as a limitation for augmented datasets."""
+    per_label: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for record in records:
+        per_label[record["label"]][record["dup_group"]] += 1
+
+    dissolved = 0
+    for label, group_sizes in per_label.items():
+        total = sum(group_sizes.values())
+        for group, size in group_sizes.items():
+            if size > total * OVERSIZED_GROUP_FRACTION:
+                dissolved += 1
+                for record in records:
+                    if record["label"] == label and record["dup_group"] == group:
+                        record["dup_group"] = f"{group}#{id(record)}"
+    return dissolved
+
+
+def make_splits(records: list[dict]) -> None:
+    """Grouped stratified splits, deterministic (seed 42)."""
+    rng = random.Random(SEED)
+    per_label_groups: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for record in records:
+        per_label_groups[record["label"]][record["dup_group"]].append(record)
+
+    for label, groups in per_label_groups.items():
+        ordered = sorted(groups.items(), key=lambda kv: kv[0])
+        total = sum(len(items) for _, items in ordered)
         n_train = int(total * TRAIN_FRAC)
         n_val = int(total * VAL_FRAC)
-        rng.shuffle(groups)
+        rng.shuffle(ordered)
 
         assigned = 0
-        n_groups = len(groups)
-        for index, (source, size) in enumerate(groups):
+        n_groups = len(ordered)
+        for index, (_group, items) in enumerate(ordered):
             remaining_groups = n_groups - index
-            # Reserve at least two groups for val/test whenever the label has
-            # more than two groups; otherwise degrade gracefully.
             if assigned < n_train and remaining_groups > 2:
                 split = "train"
             elif (assigned - n_train) < n_val and remaining_groups > 1:
                 split = "val"
             else:
                 split = "test"
-            split_of[(label, source)] = split
-            assigned += size
-
-    splits: dict[str, list[dict[str, str]]] = {"train": [], "val": [], "test": []}
-    for (label, source), items in buckets.items():
-        splits[split_of[(label, source)]].extend(items)
-    return splits
+            for item in items:
+                item["split"] = split
+            assigned += len(items)
 
 
-def resize_and_copy(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Resize the long edge to MAX_DIMENSION and copy into processed/.
+def balance(records: list[dict], caps: dict[str, int]) -> int:
+    """Deterministically drop whole duplicate groups above the caps, then
+    single images. Returns the number of dropped records."""
+    rng = random.Random(SEED + 1)
+    dropped = 0
+    per_split_label: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for record in records:
+        per_split_label[(record["split"], record["label"])].append(record)
 
-    Saving a fresh JPEG strips metadata (including EXIF), mirroring the
-    backend's storage behaviour for uploaded donation images.
-    """
-    from PIL import Image
+    for (split, label), items in per_split_label.items():
+        cap = caps.get(split)
+        if cap is None or len(items) <= cap:
+            continue
+        by_group: dict[str, list[dict]] = defaultdict(list)
+        for item in items:
+            by_group[item["dup_group"]].append(item)
+        group_items = sorted(by_group.values(), key=lambda g: str(sorted(p["path"] for p in g)[0]))
+        rng.shuffle(group_items)
 
-    processed: list[dict[str, str]] = []
-    for row in rows:
-        raw_path = Path(row["raw_path"])
-        relative = Path(row["source"]) / row["label"] / raw_path.name
+        keep: list[dict] = []
+        count = 0
+        for group in group_items:
+            if count + len(group) <= cap:
+                keep.extend(group)
+                count += len(group)
+        # Fill any remainder with single images from dropped groups.
+        dropped_flat = [item for group in group_items if group not in keep for item in group]
+        for item in dropped_flat:
+            if count >= cap:
+                break
+            keep.append(item)
+            count += 1
+        keep_ids = {id(item) for item in keep}
+        for item in items:
+            if id(item) not in keep_ids:
+                item["_dropped"] = True
+                dropped += 1
+    return dropped
+
+
+def resize_and_copy(records: list[dict]) -> int:
+    failures = 0
+    for record in records:
+        source: Path = record["path"]
+        relative = Path(record["source_group"]) / record["label"] / source.name
         destination = PROCESSED_DIR / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with Image.open(raw_path) as image:
-            image = image.convert("RGB")
-            image.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
-            image.save(destination, "JPEG", quality=88)
-        processed.append({**row, "image_path": str(relative)})
-    return processed
+        try:
+            with Image.open(source) as image:
+                width, height = image.size
+                if min(width, height) < MIN_SIDE:
+                    record["_dropped"] = True
+                    failures += 1
+                    continue
+                image = image.convert("RGB")
+                image.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+                image.save(destination, "JPEG", quality=88)
+            record["image_path"] = relative.as_posix()
+        except Exception:  # noqa: BLE001
+            record["_dropped"] = True
+            failures += 1
+    return failures
 
 
-def write_labels_csv(rows: list[dict[str, str]], force: bool) -> None:
+def write_labels_csv(records: list[dict], force: bool) -> None:
     labels_path = PROCESSED_DIR / "labels.csv"
     if labels_path.exists() and not force:
         sys.exit(
@@ -176,75 +438,138 @@ def write_labels_csv(rows: list[dict[str, str]], force: bool) -> None:
             "silently — pass --force if you really intend to rebuild them."
         )
     with labels_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "image_path",
-                "label",
-                "source",
-                "consent_ref",
-                "split",
-                "annotator",
-            ],
-        )
+        writer = csv.DictWriter(handle, fieldnames=LABELS_CSV_FIELDS)
         writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "image_path": row["image_path"],
-                    "label": row["label"],
-                    "source": row["source"],
-                    "consent_ref": row["consent_ref"],
-                    "split": row["split"],
-                    "annotator": row["annotator"],
-                }
+        for record in sorted(records, key=lambda r: r["image_path"]):
+            writer.writerow({field: record.get(field, "") for field in LABELS_CSV_FIELDS})
+
+
+def write_distribution_report(records: list[dict], stats: dict, excluded: list[dict]) -> None:
+    distribution = {
+        label: {
+            split: sum(
+                1 for r in records if r["label"] == label and r["split"] == split
             )
+            for split in ("train", "val", "test")
+        }
+        for label in LABELS
+    }
+    by_source: dict[str, int] = defaultdict(int)
+    for record in records:
+        by_source[record["source_group"]] += 1
+    by_licence: dict[str, int] = defaultdict(int)
+    for record in records:
+        by_licence[record["licence"]] += 1
+
+    report = {
+        "seed": SEED,
+        "total_images": len(records),
+        "per_class_per_split": distribution,
+        "per_source_group": dict(by_source),
+        "per_licence": dict(by_licence),
+        "deduplication": stats,
+        "excluded_images": len(excluded),
+        "exclusion_reasons": sorted({e["reason"] for e in excluded}),
+        "dataset_types": {
+            t: sum(1 for r in records if r["dataset_type"] == t)
+            for t in ("public_licensed", "consented_original")
+        },
+    }
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    (REPORTS_DIR / "dataset_distribution.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        fig, axis = plt.subplots(figsize=(9, 5))
+        x = np.arange(len(LABELS))
+        width = 0.26
+        for offset, split in enumerate(("train", "val", "test")):
+            values = [distribution[label][split] for label in LABELS]
+            axis.bar(x + (offset - 1) * width, values, width, label=split)
+        axis.set_xticks(x, LABELS, rotation=20, ha="right")
+        axis.set_ylabel("Images")
+        axis.set_title("SEVA-AI Stage 1 dataset distribution (public licensed)")
+        axis.legend()
+        fig.tight_layout()
+        fig.savefig(REPORTS_DIR / "dataset_distribution.png", dpi=120)
+        plt.close(fig)
+    except Exception as exc:  # noqa: BLE001 — chart is a nicety, never fatal
+        print(f"warning: distribution chart skipped ({exc})")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare the SEVA-AI dataset")
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite an existing labels.csv (splits are never rebuilt silently)",
-    )
+    parser.add_argument("--force", action="store_true",
+                        help="overwrite labels.csv (splits are never rebuilt silently)")
+    parser.add_argument("--max-per-source-class", type=int, default=2500,
+                        help="deterministic pre-sample cap per (class, source group) "
+                             "before near-duplicate analysis")
+    parser.add_argument("--max-train-per-class", type=int, default=1100)
+    parser.add_argument("--max-val-per-class", type=int, default=220)
+    parser.add_argument("--max-test-per-class", type=int, default=220)
     args = parser.parse_args()
 
-    consent = read_consent()
-    records = collect_images(consent)
+    registry = read_registry()
+    records, excluded = collect_images(registry)
     if not records:
         sys.exit("error: no images found under ml/data/raw — nothing to prepare.")
+    print(f"collected {len(records)} candidate images, {len(excluded)} excluded")
 
-    splits = make_splits(records)
+    records, presampled = pre_sample(records, args.max_per_source_class)
+    print(f"pre-sample: {presampled} images dropped by the per-(class, source) cap "
+          f"of {args.max_per_source_class}")
 
-    test_counts: dict[str, int] = {label: 0 for label in LABELS}
-    rows: list[dict[str, str]] = []
-    for split in ("train", "val", "test"):
-        for item in splits[split]:
-            rows.append({"split": split, **item})
-            if split == "test":
-                test_counts[item["label"]] += 1
+    records, stats = deduplicate(records)
+    print(f"after dedup: {len(records)} images ({stats['exact_duplicates_removed']} exact "
+          f"duplicates removed, {stats['near_duplicate_groups']} near-duplicate groups)")
 
-    rows = resize_and_copy(rows)
-    write_labels_csv(rows, force=args.force)
+    dissolved = dissolve_oversized_groups(records)
+    if dissolved:
+        print(f"WARNING: {dissolved} oversized near-duplicate group(s) dissolved into "
+              "singletons — minor within-family leakage is possible for augmented "
+              "sources (documented limitation).")
 
-    print(f"Prepared {len(rows)} images (seed {SEED}).")
-    print("Test-split images per class:")
+    make_splits(records)
+    dropped = balance(
+        records,
+        {
+            "train": args.max_train_per_class,
+            "val": args.max_val_per_class,
+            "test": args.max_test_per_class,
+        },
+    )
+    records = [r for r in records if not r.get("_dropped")]
+    print(f"balance: dropped {dropped} images to respect per-class caps")
+
+    copy_failures = resize_and_copy(records)
+    records = [r for r in records if not r.get("_dropped")]
+    print(f"resize/copy: {copy_failures} unreadable/too-small images excluded")
+
+    write_labels_csv(records, force=args.force)
+    write_distribution_report(records, stats, excluded)
+
+    test_counts = {
+        label: sum(1 for r in records if r["label"] == label and r["split"] == "test")
+        for label in LABELS
+    }
+    print(f"\nFinal dataset: {len(records)} images (seed {SEED})")
     for label in LABELS:
-        count = test_counts[label]
-        print(f"  {label:14s} {count}")
-    small = [label for label in LABELS if 0 < test_counts[label] < MIN_TEST_IMAGES_PER_CLASS]
-    empty = [label for label in LABELS if test_counts[label] == 0]
+        counts = {
+            split: sum(1 for r in records if r["label"] == label and r["split"] == split)
+            for split in ("train", "val", "test")
+        }
+        print(f"  {label:14s} train={counts['train']:5d} val={counts['val']:4d} test={counts['test']:4d}")
+    small = [label for label, count in test_counts.items() if count < MIN_TEST_IMAGES_PER_CLASS]
     if small:
-        print(
-            f"WARNING: fewer than {MIN_TEST_IMAGES_PER_CLASS} test images for: "
-            f"{', '.join(small)}. The evaluation report must state this limitation."
-        )
-    if empty:
-        print(
-            f"WARNING: no test images at all for: {', '.join(empty)}. "
-            "Evaluation for those classes will be impossible."
-        )
+        print(f"WARNING: fewer than {MIN_TEST_IMAGES_PER_CLASS} test images for: {', '.join(small)}")
+    print(f"\nlabels.csv and distribution report written (see ml/reports/).")
     return 0
 
 

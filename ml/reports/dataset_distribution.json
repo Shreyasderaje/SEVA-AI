@@ -1,0 +1,66 @@
+{
+  "seed": 42,
+  "total_images": 6221,
+  "per_class_per_split": {
+    "clothing": {
+      "train": 1100,
+      "val": 192,
+      "test": 220
+    },
+    "grains_rice": {
+      "train": 1063,
+      "val": 204,
+      "test": 163
+    },
+    "packaged_food": {
+      "train": 627,
+      "val": 134,
+      "test": 136
+    },
+    "utensils": {
+      "train": 1100,
+      "val": 220,
+      "test": 220
+    },
+    "other": {
+      "train": 589,
+      "val": 126,
+      "test": 127
+    }
+  },
+  "per_source_group": {
+    "aig_mendeley": 1512,
+    "openfoodfacts": 897,
+    "rice_koklu": 1430,
+    "utensils_13k": 1540,
+    "wikimedia_other": 842
+  },
+  "per_licence": {
+    "CC BY 4.0": 1539,
+    "CC-BY-SA / CC0 (Open Food Facts contributor)": 697,
+    "CC-BY-SA / CC0 per upload (see _attribution.csv)": 200,
+    "CC BY 4.0 (upstream Koklu et al.; cite their paper)": 1430,
+    "MIT": 1540,
+    "CC BY-SA 4.0": 399,
+    "CC BY-SA 2.0": 55,
+    "CC BY 3.0": 22,
+    "CC BY-SA 3.0": 98,
+    "CC0": 62,
+    "Public domain": 95,
+    "CC BY 2.0": 77,
+    "CC BY-SA 2.5": 4,
+    "CC BY 2.5": 2,
+    "Attribution": 1
+  },
+  "deduplication": {
+    "exact_duplicates_removed": 54,
+    "near_duplicate_groups": 501,
+    "kept": 8547
+  },
+  "excluded_images": 0,
+  "exclusion_reasons": [],
+  "dataset_types": {
+    "public_licensed": 6221,
+    "consented_original": 0
+  }
+}

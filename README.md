@@ -25,6 +25,22 @@ transparent, explainable, rule-based matching formula.
 | Rate limiting | slowapi (login, registration, uploads) |
 | ML | PyTorch + torchvision (MobileNetV2 transfer learning), scikit-learn |
 
+## Classifier status
+
+Stage 1 of the dataset strategy trains the five-class MobileNetV2 classifier on
+**publicly licensed datasets** (AIG apparel — CC BY 4.0; Koklu rice varieties —
+CC BY 4.0; Open Food Facts product photos — CC-BY-SA/CC0; Kitchen Utensils 13K
+— MIT; Wikimedia Commons household items — per-file licence verified). See
+`ml/README.md` for sources and reproducible commands, and
+`docs/AI_ML_METHODOLOGY.md` for the model card and measured metrics. These
+public benchmark images are a Stage-1 baseline — **not** real donation photos;
+collecting consented photographs at local ashrams is the planned Stage 2, and
+the pipeline already supports it (`dataset_type=consented_original`).
+
+If the trained weights file is absent (or PyTorch is not installed), the
+backend honestly reports `model_not_configured` and donors choose the category
+manually — manual selection is a first-class workflow, never an error state.
+
 ## Quick start (development)
 
 ### Backend

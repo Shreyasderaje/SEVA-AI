@@ -9,81 +9,83 @@ academic contributions:
    implemented in `src/matching_baseline.py` in milestone M3, shared with the
    backend; it is NOT machine learning).
 
-## Current status (honest)
+## Dataset strategy
 
-- **No trained model exists.** No consented dataset has been collected yet, so
-  no training or evaluation has been run, and no metrics exist. Nothing in
-  `reports/` should be read as a measured result until a real dataset is
-  provided and the pipeline is executed on it.
-- ImageNet-pretrained MobileNetV2 weights are **not** a trained SEVA-AI
-  classifier. They are only the starting backbone for transfer learning once a
-  labelled dataset exists.
-- Until a trained weights file exists at the configured path, the backend
-  classify endpoint returns `model_not_configured` and donors choose the
-  category manually. Manual selection is a first-class path, not an error.
+**Stage 1 (this release): public licensed datasets.** The five SEVA-AI classes
+are trained from verifiably licensed public image sources (see
+`ml/data/README.md` for the full registry, licences, sizes, and curation
+rules):
 
-## Layout
+| SEVA class | Source | Licence |
+|---|---|---|
+| clothing | Apparel Images Gallery (AIG), Mendeley Data | CC BY 4.0 |
+| grains_rice | Rice Image Dataset (Koklu et al. 2021), HF mirror | CC BY 4.0 |
+| packaged_food | Open Food Facts product photos | CC-BY-SA / CC0 per upload |
+| utensils | Kitchen Utensils 13K, Hugging Face | MIT |
+| other | Wikimedia Commons (books/toys/games), per-file licence check | CC0 / PD / CC BY / CC BY-SA |
 
-```
-ml/
-├── README.md                      # this file
-├── data/
-│   ├── README.md                  # consent rules, labelling guide, CSV schema
-│   ├── raw/.gitkeep               # consented images only; never committed
-│   └── processed/.gitkeep         # split CSVs and resized copies; never committed
-├── src/
-│   ├── prepare_dataset.py         # validate images, build labels.csv, make splits
-│   ├── train_image_classifier.py  # MobileNetV2 transfer learning, saves weights + metadata
-│   ├── evaluate_image_classifier.py  # held-out test metrics, confusion matrix
-│   ├── predict_image.py           # canonical inference logic (also used by the backend)
-│   └── matching_baseline.py       # (M3) rule-based matching, shared with backend tests
-├── models/
-│   └── README.md                  # naming, versioning, what goes in git (nothing large)
-└── reports/                       # metrics JSON, confusion matrix PNG, summary markdown
-```
+**Stage 2 (future): consented original photographs.** The team will collect
+real-world donation photos during ashram visits. The registry already supports
+`dataset_type=consented_original` with a mandatory `consent_ref`; new data gets
+a new dataset version, a retrained model version, an independent evaluation,
+and a comparison against this Stage-1 baseline. The previous model stays
+registered and active-flagged for rollback (`model_versions.is_active`).
 
 ## Setup
 
-ML dependencies are deliberately **separate** from the backend (the backend
-runs fine without PyTorch — see the honest fallback below).
+ML dependencies are separate from the backend (the backend runs without
+PyTorch — see the honest fallback below).
 
 ```bash
-python -m venv ml/.venv          # or reuse the backend venv if you prefer
-source ml/.venv/Scripts/activate # Git Bash on Windows
+python -m venv ml/.venv
+source ml/.venv/Scripts/activate        # Git Bash on Windows
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r ml/requirements.txt
 ```
 
-`ml/requirements.txt` pins CPU builds of PyTorch; see the file for the exact
-install command.
-
-## Workflow
+## Workflow (Stage 1, reproducible)
 
 ```bash
-# 1. Collect CONSENTED images into ml/data/raw/<source-group>/<label>/*.jpg
-#    (see ml/data/README.md for consent + labelling rules)
+# 1. Fetch the public datasets (downloaders keep per-image attribution):
+ml/.venv/Scripts/python.exe ml/src/fetch_utensils.py --per-class 260
+ml/.venv/Scripts/python.exe ml/src/fetch_wikimedia_other.py --per-category 200
+ml/.venv/Scripts/python.exe ml/src/fetch_openfoodfacts.py --count 1300
+# AIG (879 MB RAR) and the rice ZIP are direct downloads — see ml/data/README.md.
+# Extraction: use the bundled bsdtar for RAR: /c/Windows/System32/tar.exe -xf ...
 
-# 2. Validate, resize, split (stratified by label, grouped by source, seed 42)
-python ml/src/prepare_dataset.py
+# 2. Curate + split (dedup, near-dup grouping, balance, seed 42):
+ml/.venv/Scripts/python.exe ml/src/prepare_dataset.py --force
 
-# 3. Train (freezes the backbone; optional fine-tuning of later blocks)
-python ml/src/train_image_classifier.py --epochs 15
+# 3. Train (frozen head 12 epochs + fine-tune 2 epochs, seed 42):
+cd backend && ../ml/.venv/Scripts/python.exe -u ../ml/src/train_image_classifier.py \
+    --epochs 12 --fine-tune --ft-epochs 2 --register
 
-# 4. Evaluate ONCE on the held-out test split
-python ml/src/evaluate_image_classifier.py
+# 4. Evaluate ONCE on the held-out test split:
+cd backend && ../ml/.venv/Scripts/python.exe ../ml/src/evaluate_image_classifier.py \
+    --version v1 --register
 
-# 5. Point the backend at the trained weights
-#    CLASSIFIER_WEIGHTS_PATH=../ml/models/image_classifier_v1.pt  (already the default)
+# 5. The backend loads the weights via CLASSIFIER_WEIGHTS_PATH
+#    (default ../ml/models/image_classifier_v1.pt — already configured).
 
-# CLI inference (also the canonical logic used by the backend):
-python ml/src/predict_image.py path/to/image.jpg
+# CLI inference:
+ml/.venv/Scripts/python.exe ml/src/predict_image.py path/to/image.jpg
 ```
+
+Measured results live in `ml/reports/` and `docs/AI_ML_METHODOLOGY.md`. Run
+commands and counts are recorded in `docs/BUILD_LOG.md`.
 
 ## Honesty rules (enforced by convention — do not break them)
 
 - Never claim an accuracy figure that is not present in `ml/reports/`.
-- Never present synthetic or placeholder images as real training data.
+- Never present synthetic or placeholder images as real training data; every
+  training image traces to a documented source and licence.
 - The test split is touched exactly once, by `evaluate_image_classifier.py`.
 - Model metadata (`model_metadata.json`) records seed, date, label list, split
-  sizes, and settings next to the weights; reports reference the model version.
+  sizes, settings, and measured test metrics; reports reference the version.
 - If any class has fewer than 20 test images, the evaluation report says so and
   the UI shows a limitation note.
+- Public benchmark images are NOT real donation photos: results are a Stage-1
+  baseline, never a claim of production readiness. Stage 2 (consented ashram
+  photos) exists for that reason.
+- The backend's `model_not_configured` fallback and manual category selection
+  are always preserved.

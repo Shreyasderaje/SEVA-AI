@@ -203,3 +203,106 @@ Concise progress notes and recorded decisions per milestone.
    decision, revisit if the guide requires it.
 5. Port 8000 / zombie process note from M1 still applies on this machine.
 
+---
+
+## Dataset Stage 1 — Public licensed datasets + trained classifier (2026-10-31)
+
+User decision: train the initial SEVA-AI MobileNetV2 classifier on publicly
+available image datasets (Stage 1); consented real-world photographs from
+ashram visits will follow as Stage 2.
+
+### Dataset acquisition (licence-verified per source)
+
+| SEVA class | Source | Licence | Raw images |
+|---|---|---|---|
+| clothing | Apparel Images Gallery (AIG), Mendeley Data v1 | CC BY 4.0 | 130,098 |
+| grains_rice | Rice Image Dataset — Koklu, Cinar & Taspinar (2021), HF mirror | CC BY 4.0 | 75,000 |
+| packaged_food | Open Food Facts product fronts | CC-BY-SA / CC0 per upload | 697 |
+| utensils | Kitchen Utensils 13K, Hugging Face | MIT | 1,861 |
+| other | Wikimedia Commons (toys/dolls/plush/books/board games/children's games/school supplies) | per-file CC0/PD/CC BY/CC BY-SA only | 844 |
+
+**Documented rejections/substitutions:** Freiburg Groceries — host server
+unreachable during collection and no image licence in its repository;
+BookCover30 — images copyrighted by Amazon ("fair use" only); HoloSelecta —
+archive holds 295 images plus study data despite its title. Wikimedia Commons
+was chosen for "other" because every file's licence, artist, and source URL
+are captured per image via the Commons API.
+
+### Dataset preparation (`ml/src/prepare_dataset.py`, rewritten)
+
+- New `labels.csv` schema: `image_path, label, source, source_url, licence,
+  dataset_type, consent_ref, annotator, split` — `dataset_type` distinguishes
+  `public_licensed` (Stage 1) from `consented_original` (Stage 2, consent_ref
+  mandatory; enforced by the script).
+- Source registry `ml/data/raw/datasets.csv` carries licence/source/mapping per
+  group; per-image overrides come from `_attribution.csv` sidecars (Open Food
+  Facts, Wikimedia).
+- Curation: SHA-256 exact-dedup (54 removed), near-duplicate grouping via
+  64-bit average hash (Hamming ≤ 4; 501 groups), deterministic pre-sample cap
+  2,500 per (class, source) before analysis, per-split class balancing.
+- Leakage control: duplicate groups share a split; ONE oversized augmented-rice
+  family (>25 % of its class) was dissolved into singletons — documented as a
+  minor residual-leakage limitation.
+- **Final Stage-1 dataset: 6,221 images (seed 42)** — clothing 1,512 (1100/192/220),
+  grains_rice 1,430 (1063/204/163), packaged_food 897 (627/134/136),
+  utensils 1,540 (1100/220/220), other 842 (589/126/127).
+  Distribution report: `ml/reports/dataset_distribution.json` / `.png`.
+
+### Training (architecture unchanged from M2)
+
+MobileNetV2, ImageNet backbone, fresh 5-class head; 224×224, ImageNet
+normalization; seed 42 everywhere; 12 frozen-head epochs (Adam lr 1e-3) + 2
+fine-tune epochs (last 3 blocks, lr 1e-5); model selection on validation only;
+test split untouched until evaluation. Hardware inspected first: i5-12450HX
+(8C/12T), 11.7 GB RAM, 219 GB free on D:. ML venv: torch 2.15.0+cpu.
+Commands in `ml/README.md`. Best validation accuracy: **0.9909** (epoch 7).
+
+### Evaluation (held-out test, touched once)
+
+**Overall accuracy 0.9896 on 866 test images.** Per-class P/R/F1: clothing
+0.9955/0.9955/0.9955 · grains_rice 1.0000/1.0000/1.0000 · packaged_food
+0.9926/0.9926/0.9926 · utensils 0.9954/0.9773/0.9862 · other
+0.9542/0.9843/0.9690. Confusion concentrated in utensils↔other (6 of 9
+errors). All reports in `ml/reports/`: metrics JSON, confusion-matrix PNG,
+summary MD, loss curves PNG, training history JSON, dataset distribution
+JSON+PNG. No small-class limitation triggered (min support 127).
+
+### Integration
+
+- `model_versions` row `seva_image_classifier v1` (active) and
+  `model_evaluations` row registered in the dev database via the new
+  `ml/src/registry.py`.
+- Weights at `ml/models/image_classifier_v1.pt` — exactly the existing
+  `CLASSIFIER_WEIGHTS_PATH` default; no backend code change needed. Weights
+  are gitignored; metadata JSON is committed.
+- Live API test (`ml/src/test_classify_api.py`, backend served from the ML
+  venv): real predictions returned for all five classes from held-out test
+  images — clothing 1.000, grains_rice 1.000, packaged_food 0.998, utensils
+  MISS (predicted `other` 0.916 — consistent with utensils recall 0.977),
+  other MISS (packaged_food 0.547 vs other 0.45 on an ambiguous board-game
+  photo). Invalid uploads still 422. The upload rate limiter correctly
+  engaged during repeated runs.
+- **Fallback preserved:** in the standard backend venv (no torch),
+  `classifier_status` honestly reports "weights exist but PyTorch/torchvision
+  are not installed" → `model_not_configured`; manual category selection and
+  all M1/M2 behaviour unchanged.
+
+### Test results after integration
+
+Backend `pytest` **62 passed** · frontend `vitest` **27 passed** · production
+build clean (415.5 kB JS). M1/M2 functionality and API contracts untouched
+(only additive ML-side changes; one backend-venv-free fix in `registry.py`).
+
+### Known limitations / notes for Stage 2
+
+1. **Public-benchmark images ≠ real donation photos.** 0.9896 describes this
+   distribution only; expect a substantial drop on real ashram-collected
+   photos. Never present Stage-1 metrics as production readiness.
+2. packaged_food under-represented (OFF API rate limits).
+3. Minor within-family leakage possible for dissolved augmented-rice groups.
+4. No training-time augmentation in our pipeline (upstream augmentation exists
+   only for rice — inflates that class's separability).
+5. Stage 2 wiring is ready: add a `consented_original` group with consent_ref
+   → re-run prepare (`--force`) → train a new version → evaluate → compare in
+   reports; previous model stays registered for rollback.
+

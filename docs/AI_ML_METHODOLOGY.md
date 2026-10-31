@@ -8,31 +8,58 @@ estimated, projected, or invented.
 
 ## Part 1 — Image classifier (donated-item categories)
 
-### Honest current status
+### Dataset strategy
 
-> **The SEVA-AI classifier is NOT trained.** No consented dataset has been
-> collected yet, so no training run, no evaluation, and no measured metrics
-> exist. The backend therefore runs in the documented `model_not_configured`
-> mode: donors choose the category manually, which is a first-class workflow,
-> not an error state.
->
-> **ImageNet-pretrained MobileNetV2 weights are not a SEVA-AI classifier.**
-> They are only the transfer-learning starting point for the backbone once a
-> real labelled dataset exists. This project will never present pretrained
-> ImageNet weights as a trained five-class donation classifier.
+**Stage 1 (this release): publicly licensed datasets** — chosen because no
+consented real-world collection exists yet. **Stage 2 (planned): photographs
+collected by the team during ashram visits**, entering the pipeline as
+`dataset_type=consented_original` with mandatory consent references, producing
+a new dataset version, a new model version, an independent evaluation, and a
+comparison against the Stage-1 baseline (previous versions stay registered for
+rollback).
 
-### Design
+### Stage 1 dataset (public licensed, seed 42)
+
+| SEVA class | Source | Licence (as stated by the host) |
+|---|---|---|
+| clothing | Apparel Images Gallery (AIG), Mendeley Data v1 (130,014 garment photos) | CC BY 4.0 |
+| grains_rice | Rice Image Dataset — Koklu, Cinar & Taspinar (2021), 75,000 grain photos, 5 varieties | CC BY 4.0 |
+| packaged_food | Open Food Facts product front photos (contributor-credited) | CC-BY-SA / CC0 per upload |
+| utensils | Kitchen Utensils Dataset 13K (10 utensil classes) | MIT |
+| other | Wikimedia Commons: toys, dolls, plush toys, books, board games, children's games, school supplies | per-file: CC0 / PD / CC BY / CC BY-SA only |
+
+- **Rejections (documented):** Freiburg Groceries (host unreachable during
+  collection; no image licence in the repository), BookCover30 (images
+  copyrighted by Amazon; "fair use" only — not a redistribution licence),
+  HoloSelecta (archive contains 295 images plus study data, far fewer than its
+  title suggests).
+- **Curation:** exact-duplicate removal (SHA-256), near-duplicate grouping
+  (64-bit average hash, Hamming ≤ 4), per-(class, source) pre-sample cap,
+  per-split class balancing, licence metadata per image. Details and rules:
+  `ml/data/README.md`.
+- **Leakage control:** images from the same duplicate group always share a
+  split. One oversized augmented-rice family exceeded 25 % of its class and was
+  dissolved into singletons — a small within-family leakage remains possible
+  for augmented sources and is recorded as a limitation.
+- **Measured distribution (this build, seed 42):** see
+  `ml/reports/dataset_distribution.json` / `.png`. Build totals: **6,221
+  images** — clothing 1,512 · grains_rice 1,430 · packaged_food 897 ·
+  utensils 1,540 · other 842 (train/val/test splits in the report).
+- **Known distribution limitation:** `packaged_food` is smaller than the other
+  classes because the Open Food Facts public API rate-limited anonymous
+  collection at 697 raw images; this is visible in the per-class metrics.
+
+### Model design (unchanged from the M2 architecture)
 
 | Aspect | Decision |
 |---|---|
 | Model | MobileNetV2 (torchvision), ImageNet backbone, classifier head replaced |
 | Classes | Exactly five, fixed: `clothing`, `grains_rice`, `packaged_food`, `utensils`, `other` |
 | Input | 224×224, RGB, ImageNet normalization |
-| Training | Phase 1: backbone frozen, head trained (Adam, lr 1e-3). Phase 2 (optional): last 3 blocks unfrozen, lr 1e-5 |
+| Training | Phase 1: backbone frozen, head trained (Adam, lr 1e-3, 12 epochs). Phase 2: last 3 blocks unfrozen (lr 1e-5, 2 epochs) |
 | Seed | 42 for Python, NumPy, and PyTorch; recorded in `model_metadata.json` |
-| Splits | Stratified by label, grouped by source session, created once with seed 42; the test split is touched exactly once, by `evaluate_image_classifier.py` |
-| Evaluation | Per-class precision/recall/F1, overall accuracy, confusion matrix → `ml/reports/` |
-| Known-size guard | Any class with fewer than 20 test images triggers an explicit limitation note in the report and the UI |
+| Model selection | Training + validation splits only; early selection by best validation accuracy |
+| Evaluation | Held-out test split touched exactly once: per-class precision/recall/F1, overall accuracy, confusion matrix → `ml/reports/` |
 
 Admin-added display subcategories (e.g. "Men's", "Rice") are UI taxonomy only —
 they never become classifier classes and never change model output labels.
@@ -40,46 +67,69 @@ they never become classifier classes and never change model output labels.
 ### Inference integration
 
 - Canonical inference logic: `ml/src/predict_image.py` (single source of truth).
-- The backend wraps it through `backend/app/ml/classifier.py`, imported lazily
-  so the backend runs without PyTorch installed.
-- `CLASSIFIER_WEIGHTS_PATH` is resolved against the backend configuration
-  directory (never the terminal CWD); the resolved path and file-presence flag
-  are logged in startup diagnostics without secrets.
-- When the weights file is missing — or PyTorch is unavailable — the classify
-  endpoint returns `{"status": "model_not_configured"}` with HTTP 200. Manual
-  category selection and every other feature continue to work.
-- No automatic model download happens at application startup. No fabricated
-  prediction is ever returned.
+- The backend wraps it through `backend/app/ml/classifier.py`, imported lazily.
+- `CLASSIFIER_WEIGHTS_PATH` resolves against the backend configuration
+  directory; the resolved path and file-presence flag are logged at startup.
+- When the weights file is missing — or PyTorch is unavailable — the endpoint
+  returns `{"status": "model_not_configured"}` with HTTP 200, and manual
+  category selection keeps working. No auto-download at startup; no fabricated
+  predictions.
 
-### Dataset status
+### Measured results (Stage 1 model `v1`, held-out test split)
 
-- **Collected: 0 images.** `ml/data/raw/` is empty; no consent references exist.
-- The full pipeline (`prepare_dataset.py` → `train_image_classifier.py` →
-  `evaluate_image_classifier.py` → `predict_image.py`) is implemented and
-  compile-checked; the split logic is verified to be deterministic (seed 42),
-  stratified per class, and free of source-session leakage (verified by an
-  offline simulation; see `docs/BUILD_LOG.md`, M2).
-- When a dataset is collected under the consent rules in `ml/data/README.md`,
-  the pipeline produces the weights and the measured metrics that will fill
-  the "Measured results" table below.
+Copied verbatim from `ml/reports/image_classifier_v1_metrics.json` /
+`image_classifier_v1_summary.md` (evaluated 2026-10-31, 866 test images,
+touched once, seed 42):
 
-### Measured results
+- **Overall accuracy: 0.9896**
+- Best validation accuracy during training: 0.9909 (frozen-head epoch 7)
+- Per class:
 
-_None. No evaluation has been run — there is no dataset. When an evaluation
-exists, its per-class precision/recall/F1, overall accuracy, and confusion
-matrix will be copied here **from `ml/reports/`** with the model version._
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| clothing | 0.9955 | 0.9955 | 0.9955 | 220 |
+| grains_rice | 1.0000 | 1.0000 | 1.0000 | 163 |
+| packaged_food | 0.9926 | 0.9926 | 0.9926 | 136 |
+| utensils | 0.9954 | 0.9773 | 0.9862 | 220 |
+| other | 0.9542 | 0.9843 | 0.9690 | 127 |
 
-### Limitations (of the design, independent of training)
+- Confusion matrix (rows = actual, columns = predicted; 9 errors in total):
+  clothing→other 1, packaged_food→clothing 1, utensils→other 5,
+  other→packaged_food 1, other→utensils 1. The confusion is concentrated in
+  "utensils"/"other" — the two classes whose public sources are the most
+  semantically diffuse.
+- All classes have ≥ 127 test images, so no small-class limitation note is
+  triggered (threshold: 20).
+- Training/validation curves: `ml/reports/loss_curves.png`; per-epoch history:
+  `ml/reports/training_history.json`; confusion-matrix figure:
+  `ml/reports/image_classifier_v1_confusion_matrix.png`.
+- Registry: `model_versions` row `seva_image_classifier v1`
+  (id `1a6602ea-4b08-46ea-bb6b-016a8b8a6af2`, active) and `model_evaluations`
+  row (id `8d0eadce-f8b1-40ec-9748-7d37749ae6f2`, split "test") in the dev
+  database. Weights: `ml/models/image_classifier_v1.pt` (gitignored; metadata
+  JSON committed).
 
-- Five broad classes only; fine-grained items (e.g. rice vs. wheat) are left to
-  the donor-confirmed display subcategory.
-- Classification quality will depend entirely on the size, breadth, and quality
-  of the consented dataset; small datasets will produce weak, high-variance
-  classifiers, and the evaluation report will say so.
+### Limitations (stated plainly)
+
+- **Public benchmark images are not real donation photographs.** AIG is
+  studio-style apparel, rice images are flat-lay grain scans, and Wikimedia
+  images are encyclopedic photos. The 0.9896 test accuracy describes
+  performance on THIS distribution only and must never be read as production
+  readiness on real donation photos — expect a substantial drop on Stage-2
+  real-world images, which is exactly why that stage is planned.
+- Class distributions are domain-skewed: "clothing" is garment-type classes,
+  "grains_rice" is rice-variety scans, and "other" is encyclopedic miscellany.
+- `packaged_food` is under-represented (897 images; Open Food Facts API rate
+  limits stopped anonymous collection) — visible as the smallest test support.
 - The classifier sees only the primary photograph; supporting photos are not
   processed in this release.
-- Preview thumbnails and the classifier assume real photographs of items;
-  adversarial or unrelated images fall back to the `other` class at best.
+- Augmented-source families may retain minor within-family leakage after
+  oversized-group dissolution (documented above).
+- No training-time augmentation was used (honest, simple pipeline); the
+  Koklu rice images are already augmented upstream, which inflates that
+  class's apparent separability relative to natural photographs.
+- Any class with fewer than 20 test images triggers an explicit limitation
+  note in the evaluation summary and the UI.
 
 ---
 

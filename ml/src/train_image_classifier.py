@@ -1,21 +1,26 @@
 """Train the SEVA-AI image classifier (MobileNetV2 transfer learning).
 
 Reads `ml/data/processed/labels.csv` (produced by `prepare_dataset.py`), trains
-the classifier head with the backbone frozen, and optionally fine-tunes the
-last MobileNet blocks at a lower learning rate. Saves the best weights (by
+the classifier head with the backbone frozen, optionally fine-tunes the last
+MobileNet blocks at a lower learning rate, and saves the best weights (by
 validation accuracy) plus `model_metadata.json` next to them.
+
+Reports produced here:
+- `ml/reports/training_history.json` — per-epoch train/val loss and val accuracy
+- `ml/reports/loss_curves.png` — training and validation loss curves
 
 Honesty rules:
 - Seed 42 for Python, NumPy, and PyTorch; recorded in the metadata.
-- The TEST SPLIT IS NEVER TOUCHED HERE. Evaluation happens once, in
+- Training and validation splits are used for model selection ONLY; the TEST
+  SPLIT IS NEVER TOUCHED HERE. Evaluation happens once, in
   `evaluate_image_classifier.py`.
 - Nothing is claimed about accuracy unless measured by the evaluation script
   on the held-out test split.
 
 CLI:
-  python ml/src/train_image_classifier.py --epochs 15
-  python ml/src/train_image_classifier.py --epochs 15 --fine-tune --ft-epochs 5
-  python ml/src/train_image_classifier.py --register   # also insert into model_versions
+  ml/.venv/Scripts/python.exe ml/src/train_image_classifier.py --epochs 12
+  ml/.venv/Scripts/python.exe ml/src/train_image_classifier.py --fine-tune --ft-epochs 2
+  ml/.venv/Scripts/python.exe ml/src/train_image_classifier.py --register
 """
 
 from __future__ import annotations
@@ -31,8 +36,11 @@ from pathlib import Path
 import numpy as np
 
 ML_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ML_DIR / "src"))
+
 PROCESSED_DIR = ML_DIR / "data" / "processed"
 MODELS_DIR = ML_DIR / "models"
+REPORTS_DIR = ML_DIR / "reports"
 
 SEED = 42
 CLASSES: tuple[str, ...] = (
@@ -45,7 +53,7 @@ CLASSES: tuple[str, ...] = (
 BATCH_SIZE = 32
 BASE_LR = 1e-3
 FINE_TUNE_LR = 1e-5
-UNFREEZE_LAST_BLOCKS = 3  # MobileNetV2 features[-N:] are unfrozen for fine-tuning
+UNFREEZE_LAST_BLOCKS = 3
 
 
 def set_seeds() -> None:
@@ -82,8 +90,8 @@ class SevaDataset:
     """Minimal dataset over labels.csv rows (no augmentation — honest, simple)."""
 
     def __init__(self, rows: list[tuple[Path, int]]) -> None:
-        from torchvision import transforms
         from PIL import Image
+        from torchvision import transforms
 
         self.rows = rows
         self.transform = transforms.Compose(
@@ -116,21 +124,47 @@ def unfreeze_last_blocks(model, count: int) -> None:
             parameter.requires_grad = True
 
 
-def evaluate(model, loader, device) -> float:
+def run_epoch(model, loader, device, criterion, optimizer) -> tuple[float, float, float]:
+    """One training pass; returns (avg_loss, correct, total)."""
     import torch
 
+    model.train()
+    running_loss = 0.0
+    correct = total = 0
+    for inputs, targets in loader:
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item() * targets.numel()
+        correct += (outputs.argmax(dim=1) == targets).sum().item()
+        total += targets.numel()
+    return running_loss / max(total, 1), correct, total
+
+
+def evaluate(model, loader, device) -> tuple[float, float]:
+    """Validation pass with loss; returns (avg_loss, accuracy). No grad."""
+    import torch
+    import torch.nn as nn
+
+    criterion = nn.CrossEntropyLoss()
     model.eval()
+    running_loss = 0.0
     correct = total = 0
     with torch.no_grad():
         for inputs, targets in loader:
             inputs, targets = inputs.to(device), targets.to(device)
-            predictions = model(inputs).argmax(dim=1)
-            correct += (predictions == targets).sum().item()
+            outputs = model(inputs)
+            running_loss += criterion(outputs, targets).item() * targets.numel()
+            correct += (outputs.argmax(dim=1) == targets).sum().item()
             total += targets.numel()
-    return correct / total if total else 0.0
+    return running_loss / max(total, 1), correct / total if total else 0.0
 
 
-def train_phase(model, train_loader, val_loader, device, epochs: int, lr: float, phase: str) -> float:
+def train_phase(model, train_loader, val_loader, device, epochs: int, lr: float, phase: str,
+                history: list[dict]) -> float:
     import torch
     import torch.nn as nn
 
@@ -140,30 +174,33 @@ def train_phase(model, train_loader, val_loader, device, epochs: int, lr: float,
     )
     best_val = 0.0
     for epoch in range(1, epochs + 1):
-        model.train()
-        running_loss = 0.0
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
-            loss = criterion(model(inputs), targets)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * targets.numel()
-        val_accuracy = evaluate(model, val_loader, device)
+        train_loss, correct, total = run_epoch(model, train_loader, device, criterion, optimizer)
+        train_acc = correct / max(total, 1)
+        val_loss, val_accuracy = evaluate(model, val_loader, device)
         best_val = max(best_val, val_accuracy)
+        history.append(
+            {
+                "phase": phase,
+                "epoch": epoch,
+                "train_loss": round(train_loss, 5),
+                "train_accuracy": round(train_acc, 5),
+                "val_loss": round(val_loss, 5),
+                "val_accuracy": round(val_accuracy, 5),
+            }
+        )
         print(
             f"[{phase}] epoch {epoch:3d}/{epochs}  "
-            f"train_loss={running_loss / len(train_loader.dataset):.4f}  "
-            f"val_acc={val_accuracy:.4f}"
+            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f}  "
+            f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f}"
         )
     return best_val
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train the SEVA-AI classifier")
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--fine-tune", action="store_true")
-    parser.add_argument("--ft-epochs", type=int, default=5)
+    parser.add_argument("--ft-epochs", type=int, default=2)
     parser.add_argument("--version", type=str, default=None,
                         help="model version tag (default: auto v<N>)")
     parser.add_argument("--register", action="store_true",
@@ -183,6 +220,7 @@ def main() -> int:
 
     set_seeds()
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"device: {device} | seed: {SEED}")
 
     train_rows = load_split("train")
     val_rows = load_split("val")
@@ -195,24 +233,28 @@ def main() -> int:
     val_loader = DataLoader(SevaDataset(val_rows), batch_size=BATCH_SIZE)
 
     # Transfer learning: ImageNet backbone for the FEATURES, fresh 5-class head.
+    # The architecture is unchanged from the M2 design (MobileNetV2, 224x224,
+    # ImageNet normalization, five fixed classes).
     model = models.mobilenet_v2(weights="IMAGENET1K_V1")
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, len(CLASSES))
     freeze_backbone(model)
     model.to(device)
 
-    best_val = train_phase(model, train_loader, val_loader, device, args.epochs, BASE_LR, "frozen-head")
+    history: list[dict] = []
+    best_val = train_phase(model, train_loader, val_loader, device, args.epochs, BASE_LR,
+                           "frozen-head", history)
 
     fine_tuned = False
     if args.fine_tune:
         unfreeze_last_blocks(model, UNFREEZE_LAST_BLOCKS)
         model.to(device)
-        best_val = train_phase(
-            model, train_loader, val_loader, device, args.ft_epochs, FINE_TUNE_LR, "fine-tune"
-        )
+        best_val = train_phase(model, train_loader, val_loader, device, args.ft_epochs,
+                               FINE_TUNE_LR, "fine-tune", history)
         fine_tuned = True
 
-    # Pick the version tag and save weights + metadata.
+    # Pick the version tag and save weights + metadata + training reports.
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     if args.version:
         version = args.version
     else:
@@ -221,6 +263,33 @@ def main() -> int:
     weights_path = MODELS_DIR / f"image_classifier_{version}.pt"
     torch.save(model.state_dict(), weights_path)
 
+    (REPORTS_DIR / "training_history.json").write_text(
+        json.dumps({"seed": SEED, "history": history}, indent=2), encoding="utf-8"
+    )
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(8, 5))
+        for phase in sorted({entry["phase"] for entry in history}):
+            entries = [e for e in history if e["phase"] == phase]
+            epochs = list(range(1, len(entries) + 1))
+            axis.plot(epochs, [e["train_loss"] for e in entries], marker="o",
+                      label=f"{phase} — train loss")
+            axis.plot(epochs, [e["val_loss"] for e in entries], marker="s",
+                      linestyle="--", label=f"{phase} — val loss")
+        axis.set_xlabel("Epoch (within phase)")
+        axis.set_ylabel("Cross-entropy loss")
+        axis.set_title("SEVA-AI classifier training/validation loss (seed 42)")
+        axis.legend()
+        fig.tight_layout()
+        fig.savefig(REPORTS_DIR / "loss_curves.png", dpi=120)
+        plt.close(fig)
+    except Exception as exc:  # noqa: BLE001 — chart is a nicety, never fatal
+        print(f"warning: loss curves skipped ({exc})")
+
     metadata = {
         "model_name": "seva_image_classifier",
         "version": version,
@@ -228,6 +297,7 @@ def main() -> int:
         "classes": list(CLASSES),
         "seed": SEED,
         "trained_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "dataset_stage": "stage1_public_licensed",
         "dataset_sizes": {"train": len(train_rows), "val": len(val_rows)},
         "settings": {
             "epochs_frozen": args.epochs,
@@ -237,8 +307,11 @@ def main() -> int:
             "learning_rate_fine_tune": FINE_TUNE_LR if fine_tuned else None,
             "batch_size": BATCH_SIZE,
             "unfrozen_blocks": UNFREEZE_LAST_BLOCKS if fine_tuned else 0,
+            "input_size": 224,
+            "normalization": "imagenet",
         },
         "best_val_accuracy": round(best_val, 4),
+        "training_history_report": "ml/reports/training_history.json",
         # Test metrics are added by evaluate_image_classifier.py and copied into
         # the model card — never invented here.
         "test_metrics": None,
@@ -248,44 +321,25 @@ def main() -> int:
 
     print(f"saved weights: {weights_path}")
     print(f"saved metadata: {metadata_path}")
+    print("reports: training_history.json, loss_curves.png (ml/reports/)")
     print(
-        "next: python ml/src/evaluate_image_classifier.py --version "
+        "next: ml/.venv/Scripts/python.exe ml/src/evaluate_image_classifier.py --version "
         f"{version}  (runs ONCE on the held-out test split)"
     )
 
     if args.register:
-        register_in_backend(weights_path, metadata_path, metadata)
+        from registry import ensure_model_version
 
-    return 0
-
-
-def register_in_backend(weights_path: Path, metadata_path: Path, metadata: dict) -> None:
-    """Optional: insert the model version into the backend's model_versions table."""
-    backend_dir = ML_DIR.parent / "backend"
-    sys.path.insert(0, str(backend_dir))
-    try:
-        from app.core.database import SessionLocal
-        from app.models.ml import ModelVersion
-    except ImportError as exc:  # pragma: no cover
-        print(f"warning: could not import the backend app ({exc}); not registered.")
-        return
-
-    session = SessionLocal()
-    try:
-        row = ModelVersion(
+        ensure_model_version(
             model_name=metadata["model_name"],
-            version=metadata["version"],
+            version=version,
             kind="image_classifier",
             artifact_path=str(weights_path.relative_to(ML_DIR.parent)),
             seed=SEED,
-            metadata_json=json.dumps(metadata),
-            is_active=True,
+            metadata=metadata,
         )
-        session.add(row)
-        session.commit()
-        print(f"registered in model_versions (id={row.id})")
-    finally:
-        session.close()
+
+    return 0
 
 
 if __name__ == "__main__":

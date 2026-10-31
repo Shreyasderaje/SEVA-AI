@@ -1,70 +1,94 @@
-# Consented image data — rules, labelling guide, schema
+# Image data — sources, licences, curation rules, schema
 
-This directory holds the SEVA-AI image dataset. **Nothing in `raw/` or
-`processed/` is ever committed to git** (see the root `.gitignore`).
+This directory holds the SEVA-AI dataset. **Nothing in `raw/` or `processed/`
+is ever committed to git** (root `.gitignore`).
 
-## Consent rules (non-negotiable)
+## Stage 1: public licensed datasets
 
-- Use only images the photographer or owner has **consented to share** for
-  training this project, or images from licensed public datasets with a
-  documented license.
-- Record the source of every image (dataset name + license, or the consenting
-  person's reference) — this becomes the `source` and `consent_ref` columns.
-- **Do not scrape** personal images from the web or social media.
-- **Do not include images of people or children** — the classifier sees
-  donated items only.
-- Never present synthetic or placeholder images as real training data. If you
-  generate illustrative demo images for UI development, keep them OUT of this
-  pipeline and label them as demo in the UI.
-
-## Directory layout
+### Directory layout
 
 ```
 ml/data/raw/
-├── consent.csv                  # maps source group → consent reference (required)
-└── <source-group>/              # one folder per photo session / dataset batch
-    ├── clothing/*.jpg           # folder name = the label
-    ├── grains_rice/*.jpg
-    ├── packaged_food/*.jpg
-    ├── utensils/*.jpg
-    └── other/*.jpg
+├── datasets.csv                  # source registry: licence, source_url, label mapping
+├── _downloads/                   # original archives (gitignored)
+├── aig_mendeley/<garment>/*.jpg  # AIG — mapped to "clothing" via registry
+├── rice_koklu/<variety>/*.jpg    # Koklu rice — mapped to "grains_rice"
+├── utensils_13k/<utensil>/*.jpg  # Kitchen Utensils 13K — mapped to "utensils"
+├── openfoodfacts/packaged_food/  # Open Food Facts product fronts
+│   └── _attribution.csv
+└── wikimedia_other/other/        # books/toys/games, per-file licence verified
+    └── _attribution.csv
 ```
 
-`consent.csv` schema (header row required):
+### Sources and licences (verified against the actual hosts)
 
-```
-source_group,consent_ref,notes
-my-phone-shoot-2026-01,CONSENT-001,"Photos taken by me, shared with permission"
-public-dataset-x,LICENSE-CC-BY-4.0,"Subset used per dataset license"
-```
+| source_group | Source | Licence (as stated by the host) | Fetcher |
+|---|---|---|---|
+| `aig_mendeley` | Apparel Images Gallery (AIG), Mendeley Data v1 — 130,014 images, 13 garment classes, 224×224 | **CC BY 4.0** (dataset page) | direct: `https://data.mendeley.com/public-files/datasets/pxkbgkydrp/files/4a7549a3-8034-455f-b580-2407d26bcb18/file_downloaded` (879 MB RAR; extract with `/c/Windows/System32/tar.exe -xf`) |
+| `rice_koklu` | Rice Image Dataset — Koklu, Cinar & Taspinar (2021), "Classification of rice varieties with deep learning methods", Computers and Electronics in Agriculture; 75,000 grain images, 5 varieties (Arborio, Basmati, Ipsala, Jasmine, Karacadag) | **CC BY 4.0** (upstream); fetched from the Hugging Face mirror `miladfa7/Rice-Image-Dataset` (230 MB ZIP) | mirror: `https://huggingface.co/datasets/miladfa7/Rice-Image-Dataset/resolve/main/Rice%20Image%20Dataset.zip` |
+| `utensils_13k` | Kitchen Utensils Dataset 13K — 10 utensil classes | **MIT** (dataset tag) | `ml/src/fetch_utensils.py` |
+| `openfoodfacts` | Open Food Facts product front photos | **CC-BY-SA / CC0 per upload**, contributor credited per photo | `ml/src/fetch_openfoodfacts.py` |
+| `wikimedia_other` | Wikimedia Commons — Toys, Dolls, Plush toys, Books, Board games, Children's games, School supplies | **per file**: only CC0 / Public Domain / CC BY / CC BY-SA kept; artist + licence + source URL captured per image | `ml/src/fetch_wikimedia_other.py` |
 
-Every image under a `<source-group>` folder inherits that group's consent
-reference. `prepare_dataset.py` refuses to run if a group is missing from
-`consent.csv`.
+**Rejections documented:** the candidate "Freiburg Groceries Dataset" could not
+be used — its host server (`aisdatasets.informatik.uni-freiburg.de`) was
+unreachable during collection and the repository states no image licence of
+its own. "BookCover30" was rejected because its images are copyrighted by
+Amazon with only a "fair use for academic purposes" note — not a clear
+redistribution licence. HoloSelecta (Mendeley) was set aside: its archive
+contains only 295 vending-machine images plus study data, far fewer than its
+title suggests. Substitutions above are licence-verified.
 
-## Labelling guide
+### Label mapping
 
-- Exactly **one label per image**, from the five fixed classes only:
-  `clothing`, `grains_rice`, `packaged_food`, `utensils`, `other`.
-- Label the **main item** in the photo. The folder the image sits in IS the
-  label — `prepare_dataset.py` validates folder names against the five classes
-  and fails loudly on anything else.
-- If the main item is unclear or mixes several classes, use `other`.
-- Each source group acts as the annotation "session"; images from the same
-  session are always placed in the same split (leakage protection).
+Raw source folders map into the five fixed SEVA classes through
+`datasets.csv`'s `label_mapping` column (`*=clothing` maps every subfolder of
+the group). No source folder is ever relabelled silently — the mapping is a
+registered, reviewable rule. The five classes stay fixed:
+`clothing`, `grains_rice`, `packaged_food`, `utensils`, `other`.
+
+## Curation rules (applied by `prepare_dataset.py`)
+
+- **Exclusions**: unreadable files, images smaller than 32 px on a side,
+  anything without a documented licence.
+- **Exact duplicates**: dropped by SHA-256 of the file bytes.
+- **Near-duplicates**: 64-bit average hash; images within Hamming distance ≤ 4
+  are unioned into duplicate groups.
+- **Leakage control**: images from the same duplicate group always land in the
+  same split. A group holding more than 25 % of its class is dissolved into
+  singletons first (otherwise one augmented family — e.g. the Koklu rice
+  augmentations — would put a whole class into one split); this is logged as a
+  limitation in the run output.
+- **Balancing**: deterministic per-(class, source) pre-sample cap (2500) before
+  analysis, then per-split per-class caps (default train 1100 / val 220 /
+  test 220) by dropping whole duplicate groups first, then single images.
+- **Splits**: stratified by class, grouped by duplicate group, seed 42,
+  created once and never regenerated silently (`--force` required).
 
 ## labels.csv schema (produced by `prepare_dataset.py`)
 
 | Column | Meaning |
 |---|---|
-| `image_path` | path of the resized copy under `processed/` (relative to `processed/`) |
+| `image_path` | resized copy under `processed/`, relative to `processed/` |
 | `label` | one of the five fixed classes |
-| `source` | source group (photo session / dataset batch) |
-| `consent_ref` | consent or license reference from `consent.csv` |
-| `split` | `train`, `val`, or `test` — stratified by label, grouped by source, seed 42 |
-| `annotator` | who assigned the label (from `consent.csv` notes or `unspecified`) |
+| `source` | human-readable dataset name |
+| `source_url` | where the dataset (or the individual image) came from |
+| `licence` | licence of the image as documented by the source host |
+| `dataset_type` | `public_licensed` (Stage 1) or `consented_original` (Stage 2, ashram visits) |
+| `consent_ref` | required for `consented_original`; empty for licensed public data |
+| `annotator` | original contributor/annotator record |
+| `split` | `train`, `val`, or `test` |
 
-Splits are created **once** with a fixed random seed (42) and are **never
-regenerated silently** — `prepare_dataset.py` refuses to overwrite an existing
-`labels.csv` unless `--force` is given, and prints the resulting split sizes
-every time it runs.
+Enforcement: `public_licensed` rows must carry `source` + `licence`;
+`consented_original` rows must carry a `consent_ref` — `prepare_dataset.py`
+refuses to build the dataset otherwise, so future ashram photography cannot
+enter the pipeline undocumented.
+
+## Stage 2 (future): consented original photographs
+
+Add a new source group (e.g. `ashram_visit_2026_q1`) to `datasets.csv` with
+`dataset_type=consented_original` and a real `consent_ref`, drop the photos
+under `raw/<group>/<class>/`, then re-run `prepare_dataset.py --force`
+(new dataset version), retrain a new model version, evaluate independently,
+and compare against the Stage-1 baseline in `ml/reports/`. The previous model
+version stays registered (`model_versions`) for rollback.

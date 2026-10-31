@@ -61,6 +61,8 @@ def load_test_rows() -> list[tuple[Path, int]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate the SEVA-AI classifier")
     parser.add_argument("--version", type=str, required=True)
+    parser.add_argument("--register", action="store_true",
+                        help="also insert this evaluation into the backend model_evaluations table")
     args = parser.parse_args()
 
     try:
@@ -200,6 +202,25 @@ def main() -> int:
             "report": str(metrics_path.relative_to(ML_DIR.parent)),
         }
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    if args.register:
+        from registry import ensure_model_version, register_evaluation
+
+        version_id = ensure_model_version(
+            model_name="seva_image_classifier",
+            version=args.version,
+            kind="image_classifier",
+            artifact_path=str(weights_path.relative_to(ML_DIR.parent)),
+            seed=SEED,
+            metadata=metadata if metadata_path.is_file() else {},
+        )
+        register_evaluation(
+            model_version_id=version_id,
+            split="test",
+            metrics=metrics,
+            report_path=str(metrics_path.relative_to(ML_DIR.parent)),
+            is_demo_data=False,
+        )
 
     print(f"overall accuracy: {metrics['overall_accuracy']:.4f} on {len(test_rows)} test images")
     for class_name, values in per_class.items():

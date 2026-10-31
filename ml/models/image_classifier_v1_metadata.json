@@ -1,0 +1,68 @@
+{
+  "model_name": "seva_image_classifier",
+  "version": "v1",
+  "architecture": "mobilenet_v2_transfer_learning",
+  "classes": [
+    "clothing",
+    "grains_rice",
+    "packaged_food",
+    "utensils",
+    "other"
+  ],
+  "seed": 42,
+  "trained_at": "2026-10-31T17:40:29.646774+00:00",
+  "dataset_stage": "stage1_public_licensed",
+  "dataset_sizes": {
+    "train": 4479,
+    "val": 876
+  },
+  "settings": {
+    "epochs_frozen": 12,
+    "fine_tuned": true,
+    "epochs_fine_tune": 2,
+    "learning_rate_frozen": 0.001,
+    "learning_rate_fine_tune": 1e-05,
+    "batch_size": 32,
+    "unfrozen_blocks": 3,
+    "input_size": 224,
+    "normalization": "imagenet"
+  },
+  "best_val_accuracy": 0.9886,
+  "training_history_report": "ml/reports/training_history.json",
+  "test_metrics": {
+    "overall_accuracy": 0.9896,
+    "per_class": {
+      "clothing": {
+        "precision": 0.9955,
+        "recall": 0.9955,
+        "f1_score": 0.9955,
+        "support": 220
+      },
+      "grains_rice": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "support": 163
+      },
+      "packaged_food": {
+        "precision": 0.9926,
+        "recall": 0.9926,
+        "f1_score": 0.9926,
+        "support": 136
+      },
+      "utensils": {
+        "precision": 0.9954,
+        "recall": 0.9773,
+        "f1_score": 0.9862,
+        "support": 220
+      },
+      "other": {
+        "precision": 0.9542,
+        "recall": 0.9843,
+        "f1_score": 0.969,
+        "support": 127
+      }
+    },
+    "report": "ml\\reports\\image_classifier_v1_metrics.json"
+  }
+}
