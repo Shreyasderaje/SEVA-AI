@@ -9,6 +9,12 @@ String(36). Enum-like columns are `String` + named CHECK constraints.
 - `a7c31f9d21b4` — M3 defect fix: `organization_documents.uploaded_at` server
   default was the string `'CURRENT_TIMESTAMP'` (readable rows broke); replaced
   with the SQL keyword and rows repaired
+- `c4d85e01a9b7` — M4: `donation_offers.pickup_date/pickup_window_start/
+  pickup_window_end/pickup_instructions` (organization's confirmed pickup plan)
+- `e91b7f3c5d20` — M4: `payment_records.donation_id`, `payment_records.rejection_reason`
+- `b7e2a94c6f10` — M4: monotonic `seq` columns on `donation_status_history`
+  (per donation) and `notifications` (per user) — deterministic ordering when
+  `created_at` ties (second-level precision on some platforms)
 
 ## Tables (18)
 
@@ -24,10 +30,10 @@ String(36). Enum-like columns are `String` + named CHECK constraints.
 | `donations` | id, reference (unique, `SEVA-YYYY-NNNNNN`), donor_id (FK), category_id (FK — the DONOR-CONFIRMED category), subcategory_id (FK, nullable), title, description, quantity (>0 CK), unit (CK 5 values), condition (CK, nullable), pickup_area, pickup_latitude/longitude (range CK), location_consent, pickup_window_start/end, ai_predicted_category (raw model output, non-authoritative), ai_confidence, status (CK, below), flagged, flag_reason, is_demo_data |
 | `donation_images` | id, donation_id (FK), stored_path, mime_type, size_bytes, position (unique per donation), is_demo_data |
 | `organization_needs` | id, organization_id (FK), category_id (FK), subcategory_id (FK, M3), title, description, unit (CK), quantity_required (>0 CK), quantity_fulfilled (0 ≤ f ≤ required CK), urgency (CK), required_by, status `active/paused/closed/fulfilled` (CK), notes, is_demo_data |
-| `donation_offers` | id, donation_id (FK), organization_id (FK), need_id (FK), status `sent/accepted/declined/withdrawn` (CK), score, rank_at_offer, factor_json, reason_text, decline_reason, quantity_received, responded_at, UNIQUE (donation_id, organization_id), is_demo_data |
-| `donation_status_history` | id, donation_id (FK), actor_user_id (FK, nullable=system), from_status, to_status, note — append-only |
-| `notifications` | id, user_id (FK), type, title, body, link, read_at, is_demo_data |
-| `payment_records` | id, donor_id (FK), organization_id (FK), amount (nullable, >0 CK), transaction_reference, receipt_path, status (CK), reviewed_by (FK), reviewed_at, is_demo_data |
+| `donation_offers` | id, donation_id (FK), organization_id (FK), need_id (FK), status `sent/accepted/declined/withdrawn` (CK), score, rank_at_offer, factor_json (matching snapshot at send time), reason_text, decline_reason, quantity_received (actual, ≤ donated), responded_at, pickup_date/pickup_window_start/pickup_window_end/pickup_instructions (M4), UNIQUE (donation_id, organization_id), is_demo_data |
+| `donation_status_history` | id, donation_id (FK), actor_user_id (FK, nullable=system), from_status, to_status, note, seq (monotonic per donation — stable ordering), — append-only |
+| `notifications` | id, user_id (FK), type, title, body, link, read_at, seq (monotonic per user), is_demo_data |
+| `payment_records` | id, donor_id (FK), organization_id (FK), donation_id (M4, nullable), amount (nullable, >0 CK), transaction_reference, receipt_path, status (CK), rejection_reason (M4), reviewed_by (FK), reviewed_at, is_demo_data |
 | `audit_logs` | id, actor_user_id (FK, nullable), action, target_type, target_id, note, ip_hash — append-only |
 | `model_versions` | id, model_name, version, kind `image_classifier/acceptance_model` (CK), artifact_path, seed, metadata_json, is_active |
 | `model_evaluations` | id, model_version_id (FK), split, metrics_json, report_path, is_demo_data |

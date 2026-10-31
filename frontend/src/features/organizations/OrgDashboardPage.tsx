@@ -157,11 +157,19 @@ export function OrgDashboardPage() {
           </div>
         </div>
         {organization.verification_status === "verified" && (
-          <Button asChild size="lg">
-            <Link to="/organization/needs/new">
-              <Plus aria-hidden /> Create need
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link to="/organization/offers">Incoming offers</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/organization/payments">Payment setup</Link>
+            </Button>
+            <Button asChild size="lg">
+              <Link to="/organization/needs/new">
+                <Plus aria-hidden /> Create need
+              </Link>
+            </Button>
+          </div>
         )}
       </div>
 

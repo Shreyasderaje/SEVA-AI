@@ -30,7 +30,8 @@ from app.core.database import get_db
 from app.core.deps import require_roles
 from app.core.rate_limit import limiter
 from app.models.donation import Donation, DonationCategory, DonationImage, DonationSubcategory
-from app.models.offer import DonationStatusHistory
+from app.models.offer import DonationOffer, DonationStatusHistory
+from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.common import Page
 from app.schemas.donation import (
@@ -134,7 +135,7 @@ def _serialize_detail(db: Session, donation: Donation) -> DonationDetailOut:
             for row in db.scalars(
                 select(DonationStatusHistory)
                 .where(DonationStatusHistory.donation_id == donation.id)
-                .order_by(DonationStatusHistory.created_at.asc())
+                .order_by(DonationStatusHistory.created_at.asc(), DonationStatusHistory.seq.asc())
             ).all()
         ],
     )
@@ -231,12 +232,18 @@ async def create_donation(
         raise
 
     # Creation row of the append-only history (None -> pending).
+    next_seq = db.scalar(
+        select(func.coalesce(func.max(DonationStatusHistory.seq), 0)).where(
+            DonationStatusHistory.donation_id == donation.id
+        )
+    ) or 0
     db.add(
         DonationStatusHistory(
             donation_id=donation.id,
             actor_user_id=user.id,
             from_status=None,
             to_status=DONATION_PENDING,
+            seq=next_seq + 1,
         )
     )
     log_audit(
@@ -378,6 +385,54 @@ def cancel_donation(
 
 def _can_view(user, donation: Donation) -> bool:
     return user.role == ROLE_ADMIN or donation.donor_id == user.id
+
+
+@router.get("/{donation_id}/payment-info")
+def donation_payment_info(
+    donation_id: str,
+    user: User = Depends(require_roles(ROLE_DONOR, ROLE_ADMIN)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """UPI payment instructions for the ACCEPTED organization — shown only when
+    the organization is verified AND its UPI details are admin-approved (§9)."""
+    donation = db.get(Donation, donation_id)
+    if donation is None or not _can_view(user, donation):
+        raise HTTPException(404, "Donation not found")
+    from app.core.constants import VERIFICATION_VERIFIED
+
+    offer = db.scalar(
+        select(DonationOffer).where(
+            DonationOffer.donation_id == donation_id,
+            DonationOffer.status == "accepted",
+        )
+    )
+    if offer is None:
+        raise HTTPException(404, "No accepted organization for this donation yet.")
+    organization = db.get(Organization, offer.organization_id)
+    if organization is None:
+        raise HTTPException(404, "Organization not found")
+    approved = (
+        organization.verification_status == VERIFICATION_VERIFIED
+        and organization.upi_status == "approved"
+    )
+    if not approved or not organization.upi_id:
+        raise HTTPException(404, "Payment details are not available for this organization yet.")
+    return {
+        "organization_id": organization.id,
+        "organization_name": organization.name,
+        "upi_id": organization.upi_id,
+        "qr_url": (
+            f"/api/payments/upi/organizations/{organization.id}/qr"
+            if organization.upi_qr_path
+            else None
+        ),
+        "instructions": (
+            "Payment happens in your own UPI app, outside SEVA-AI. Pay the "
+            "organization, then submit the transaction reference here for manual "
+            "verification by an admin. SEVA-AI does not process payments and a "
+            "submitted reference is not proof of payment."
+        ),
+    }
 
 
 @router.get("/{donation_id}/matches")

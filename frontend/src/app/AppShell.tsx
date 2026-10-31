@@ -1,12 +1,36 @@
-import { HandHeart, LogOut } from "lucide-react";
+import { Bell, HandHeart, LogOut } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-context";
+import { listNotifications } from "@/lib/workflow-api";
 
 export function AppShell() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [unread, setUnread] = useState<number | null>(null);
+
+  // Unread notification badge: polled lightly while signed in (§7 in-app only).
+  useEffect(() => {
+    if (!user) {
+      setUnread(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = () =>
+      listNotifications()
+        .then((data) => {
+          if (!cancelled) setUnread(data.unread);
+        })
+        .catch(() => undefined);
+    refresh();
+    const timer = window.setInterval(refresh, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user, unread === 0]);
 
   const handleLogout = () => {
     logout();
@@ -39,6 +63,16 @@ export function AppShell() {
                 <span className="mr-1 hidden text-sm text-muted-foreground sm:inline">
                   {user.full_name}
                 </span>
+                <Button asChild variant="ghost" aria-label={`Notifications (${unread ?? 0} unread)`}>
+                  <Link to="/notifications" className="relative">
+                    <Bell className="h-4 w-4" aria-hidden />
+                    {unread !== null && unread > 0 && (
+                      <span className="absolute -right-1 -top-1 rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-destructive-foreground">
+                        {unread}
+                      </span>
+                    )}
+                  </Link>
+                </Button>
                 <Button asChild variant="ghost">
                   <Link
                     to={

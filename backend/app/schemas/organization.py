@@ -54,6 +54,9 @@ class VerificationDecision(BaseModel):
 class AdminOrganizationOut(OrganizationApplicationOut):
     document_id: str | None = None
     document_url: str | None = None
+    upi_id: str | None = None
+    upi_status: str | None = None
+    has_qr: bool = False
 
 
 class OrganizationListItem(BaseModel):

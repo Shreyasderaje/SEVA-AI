@@ -485,3 +485,118 @@ no offers created in M3.
 5. The timeliness factor treats overdue required-by dates as fully urgent
    (documented in `AI_ML_METHODOLOGY.md`).
 
+---
+
+## Milestone M4 — Offers, Notifications, Payments (2026-11-01)
+
+Git state verified before starting: `main` at `f18366b`, clean tree. All
+previous commits untouched.
+
+### Built
+
+**Sequential offer engine (`app/services/offers.py`)**
+- `initiate_offer`: re-runs the M3 matching engine (no duplicated scoring),
+  skips organizations with any prior offer for the donation (decliners never
+  re-offered), and creates ONE offer for the highest-ranked remaining
+  candidate with a complete snapshot (score, rank, factors, weights, reasons,
+  distance → `factor_json`).
+- Initiation while an offer is `sent` is a no-op (same offer returned);
+  initiation into `offered` is guarded by a conditional donation UPDATE.
+- `accept_offer`: atomic conditional updates on offer (sent→accepted) AND
+  donation (offered→accepted); any race loses with 409. Preserves the
+  snapshot.
+- `decline_offer`: conditional sent→declined with reason; donation stays
+  `offered`; next candidate selected automatically (never the decliner);
+  no candidate → lingering offers withdrawn, donation back to `pending`,
+  donor notified.
+- No `expired` status anywhere; donation and offer states remain separate.
+
+**Pickup and completion (`app/services/pickup.py`)**
+- `accepted → pickup_scheduled → picked_up → completed`, all server-side;
+  scheduling captures date/window/instructions (migration `c4d85e01a9b7`).
+- Completion records the ACTUAL `quantity_received` (validated >0, ≤ donated)
+  on the offer and updates the linked need in the SAME transaction with
+  `delta = min(received, remaining)` via a conditional UPDATE — no
+  over-fulfilment, no double-counting (repeat hits the donation status guard
+  → 409), auto-`fulfilled` at the target.
+
+**Notifications (`app/services/notifications.py`, `app/api/notifications.py`)**
+- In-app only; created transactionally within each workflow; per-user list
+  with unread count, mark-one-read, mark-all-read; strict per-user
+  authorization. Events: offer_received, offer_sent, offer_accepted,
+  offer_declined, no_candidate, pickup_scheduled, picked_up,
+  donation_completed, upi_setup_submitted, payment_submitted,
+  payment_verified, payment_rejected.
+
+**Payments (`app/api/payments.py`)** — manual verification only, no gateway
+- Verified orgs submit UPI ID (format-validated) + optional QR image
+  (magic-byte checked, ≤10 MB, stored outside web root) →
+  `pending_approval`; admins approve/reject (reason required); `approved`
+  details become donor-visible on accepted donations.
+- Donors submit transaction reference (6–40 alnum) + optional receipt
+  (PDF/JPEG/PNG ≤5 MB, authorized access) → `submitted_unverified`; admins
+  verify/reject with reason; donor notified; donation status never changes
+  from payment events.
+
+**Frontend**
+- Notification center (`/notifications`) + header bell with unread badge
+  (30-second polling).
+- Donation detail: offer progress/history with matching snapshots, "send
+  offer to top match" action, accepted-org pickup details, completion state,
+  payment instructions (QR/UPI + disclaimer) and reference submission with
+  per-payment statuses.
+- Organization: incoming-offers page (accept/decline with reason dialog,
+  matching snapshot display, pickup scheduling dialog, picked-up/complete
+  actions) and payment setup page (status badges, resubmission resets
+  approval).
+- Admin: payment verification queue (status filter, authorized receipt links,
+  verify/reject with reason).
+
+### Database changes
+
+- `c4d85e01a9b7`: offer pickup columns (date/window/instructions).
+- `e91b7f3c5d20`: `payment_records.donation_id` + `rejection_reason`.
+- `b7e2a94c6f10`: monotonic `seq` columns (status history per donation,
+  notifications per user) + backfill — created_at ties (second precision on
+  Windows) made `ORDER BY created_at` non-deterministic.
+
+### Defects found and fixed during M4
+
+1. **Silent history-row loss**: bulk status UPDATEs synchronize the ORM
+   identity map BEFORE `record_transition`, whose dedupe guard then saw the
+   new status and skipped the append-only history row (offer/accept/complete
+   paths). Fixed by writing history BEFORE the guarded bulk update in all
+   three paths; the row rolls back with everything else if the guard fails.
+2. **Non-deterministic ordering**: `created_at` ties (second precision on
+   Windows) made `history[-1]`/notification order unstable — fixed with the
+   `seq` tie-breakers (migration `b7e2a94c6f10`).
+3. **No-candidate notification gap**: a fresh `pending` donation with no
+   eligible organization never notified the donor — the notify call was inside
+   the `offered`-only branch; now always notified (spec §5).
+4. M2 `record_status_transition` lacked the seq tie-breaker (cancel test
+   ordering flake) — aligned with the M4 implementation.
+
+### Commands and results
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `pytest` | **138 passed** (104 preserved + 34 new) |
+| Frontend tests | `npm test` | **45 passed** (38 preserved + 7 new) |
+| Production build | `npm run build` | clean (483.1 kB JS / 21.4 kB CSS) |
+| Migrations | `alembic upgrade head` (004, 005, 006) | OK |
+| E2E smoke | `scripts/smoke_m4.py` (dedicated clean DB, seeded admin) | ALL PASSED — sequential offers, decline→next, re-initiate no-op, accept, UPI approval → donor payment info, pickup → picked up → completed (need +9, repeat 409), payment submission → donor 403 → admin verified, full notification sequence |
+
+### Known limitations / notes
+
+1. M5 scope (admin analytics overview, demo seed script, final polish, clean-
+   clone README verification) remains.
+2. Concurrent acceptance is enforced by conditional UPDATEs with status
+   guards; tests verify the second writer always 409s. True parallel-writer
+   races are protected by the same pattern plus SQLite/Postgres write locking.
+3. `quantity_received` above the need's remaining amount is capped for the
+   need increment (the offer still records the full received quantity) —
+   documented in `AI_ML_METHODOLOGY.md` §9 relationship notes.
+4. Notification bell polls every 30 seconds (no websockets by design).
+5. Payment references are opaque strings; no bank integration exists or is
+   planned (manual verification only).
+

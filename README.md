@@ -8,13 +8,16 @@ organizations publish their current needs. The system classifies donated-item ph
 broad categories (transfer learning) and recommends suitable organizations using a
 transparent, explainable, rule-based matching formula.
 
-> **Status: Milestone M3 complete (Needs and Matching).** Delivered so far:
-> accounts/RBAC (M1), donations + image classification with the honest
-> `model_not_configured` fallback (M2 + Stage-1 public-dataset classifier),
-> organization applications and admin verification, needs management with
-> fulfilment tracking, and the explainable rule-based donation matching engine
-> (M3). Offers, notifications, pickup/completion, and payments are later
-> milestones. This README grows with the project.
+> **Status: Milestone M4 complete (Offers, Notifications, Payments).**
+> Delivered so far: accounts/RBAC (M1), donations + image classification with
+> the honest `model_not_configured` fallback (M2 + Stage-1 public-dataset
+> classifier), organization applications and admin verification, needs
+> management with fulfilment tracking, and the explainable rule-based matching
+> engine (M3), sequential offers with automatic next-candidate selection,
+> in-app notifications, pickup scheduling and completion with transactional
+> need updates, and UPI payments with manual admin verification (M4). The
+> remaining milestone (M5) adds the admin overview, demo seed, and final
+> polish.
 
 ## Tech stack
 

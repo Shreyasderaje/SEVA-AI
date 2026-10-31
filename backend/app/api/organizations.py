@@ -10,6 +10,7 @@ Authorization rules (§9):
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -248,6 +249,7 @@ def admin_organization_detail(
         )
     )
     data = AdminOrganizationOut.model_validate(organization)
+    data.has_qr = organization.upi_qr_path is not None
     if document is not None:
         data.document_id = document.id
         data.document_url = f"/api/organizations/{organization.id}/verification-document"
@@ -355,3 +357,62 @@ def admin_suspend(
         db, request, user, organization_id, VERIFICATION_SUSPENDED, payload.reason
     )
     return AdminOrganizationOut.model_validate(organization)
+
+
+class UpiDecision(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/admin/{organization_id}/upi-approve")
+def admin_upi_approve(
+    organization_id: str,
+    request: Request,
+    user: User = Depends(require_roles(ROLE_ADMIN)),
+    db: Session = Depends(get_db),
+) -> dict:
+    organization = db.get(Organization, organization_id)
+    if organization is None:
+        raise HTTPException(404, "Organization not found")
+    if not organization.upi_id:
+        raise HTTPException(409, "This organization has not submitted UPI details.")
+    organization.upi_status = "approved"
+    log_audit(
+        db,
+        actor_user_id=user.id,
+        action="organization.upi_approved",
+        target_type="organization",
+        target_id=organization.id,
+        note=f"UPI details approved for {organization.name}",
+        ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return {"upi_id": organization.upi_id, "upi_status": organization.upi_status}
+
+
+@router.post("/admin/{organization_id}/upi-reject")
+def admin_upi_reject(
+    organization_id: str,
+    request: Request,
+    payload: UpiDecision,
+    user: User = Depends(require_roles(ROLE_ADMIN)),
+    db: Session = Depends(get_db),
+) -> dict:
+    organization = db.get(Organization, organization_id)
+    if organization is None:
+        raise HTTPException(404, "Organization not found")
+    reason = (payload.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(422, "A reason is required to reject UPI details.")
+    organization.upi_status = "rejected"
+    organization.rejection_reason = reason
+    log_audit(
+        db,
+        actor_user_id=user.id,
+        action="organization.upi_rejected",
+        target_type="organization",
+        target_id=organization.id,
+        note=f"UPI details rejected for {organization.name} | reason: {reason}",
+        ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return {"upi_id": organization.upi_id, "upi_status": organization.upi_status}

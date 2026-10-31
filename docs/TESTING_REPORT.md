@@ -1,6 +1,6 @@
 # SEVA-AI — Testing report
 
-Commands, results, and known gaps per milestone. Last updated: M3.
+Commands, results, and known gaps per milestone. Last updated: M4.
 
 ## How to run
 
@@ -9,15 +9,16 @@ cd backend && .venv/Scripts/python.exe -m pytest        # backend suite
 cd frontend && npm test                                  # Vitest + RTL suite
 cd frontend && npm run build                             # tsc + production build
 cd backend && .venv/Scripts/python.exe scripts/smoke_m3.py http://localhost:8010
+cd backend && .venv/Scripts/python.exe scripts/smoke_m4.py http://localhost:8010
 ```
 
-## Current results (after M3)
+## Current results (after M4)
 
 | Suite | Count | Status |
 |---|---|---|
-| Backend (pytest) | **104** | all passing |
-| Frontend (Vitest + RTL) | **38** | all passing |
-| Production build (`tsc + vite build`) | — | clean (454.4 kB JS / 20.6 kB CSS) |
+| Backend (pytest) | **138** | all passing |
+| Frontend (Vitest + RTL) | **45** | all passing |
+| Production build (`tsc + vite build`) | — | clean (483.1 kB JS / 21.4 kB CSS) |
 
 ## Coverage by milestone
 
@@ -80,10 +81,40 @@ clothing 41.8 % of test images have train near-duplicates).
   donation → matches (score 92.0, distance 1.2 km, all five factors, reasons,
   determinism) → fulfil → auto-fulfilled excluded → public directory/needs.
   **All checks passed.**
+- `scripts/smoke_m4.py` (dedicated clean database) — sequential offers
+  (decline → next candidate, never the decliner again), re-initiate no-op,
+  accept → donation accepted, UPI setup → pending → admin approval → donor
+  payment info visible, pickup scheduled → picked up → completed (need +9,
+  repeat blocked 409), donor payment submission → donor cannot self-verify →
+  admin verified, full donor notification sequence. **All checks passed.**
+
+### M4 — Offers, notifications, payments (34 backend, 7 frontend)
+- **Offers (10):** initiation to the highest-ranked org with a full matching
+  snapshot; single-active-offer + duplicate-initiate no-op; org accepts own
+  offer → donation accepted (snapshot preserved); cross-org accept hidden
+  (404); donors cannot accept (403); decline marks only the offer and selects
+  the next candidate (order-agnostic); decliner never re-offered; no
+  candidate → donation `pending` + donor notified; initiation from accepted
+  state 409; decline-after-accept 409.
+- **Notifications (5):** correct users notified for workflow events;
+  cross-user access 404; mark-one-read; mark-all-read; duplicate accept does
+  not duplicate notifications (status-guard idempotency).
+- **Pickup/completion (9):** valid scheduling; invalid window 422; donor
+  pickup notifications; completion before pickup 409; full lifecycle history
+  (pending→…→completed in order); received-quantity validation (0 and
+  >donated 422); need fulfilment cap + auto-fulfil at target; repeated
+  completion 409 without double-count; audit actions recorded.
+- **Payments (10):** unverified org cannot configure payments; UPI format
+  validation; unapproved UPI hidden from donors (404); submission recorded as
+  `submitted_unverified` without changing donation status; reference format
+  422; donor cannot self-verify (403); org cannot verify (403); admin
+  verify/reject with reason + re-review 409 + donor notifications; approved
+  UPI then donor-visible payment info with the outside-SEVA-AI disclaimer;
+  anonymous denied.
 
 ## Known gaps
 
-- Offer workflows, notifications, pickup/completion, payments: M4 (by design).
+- M5 scope (admin analytics overview, demo seed, final polish) remains.
 - Rate-limit 429 body tested on auth endpoints only; upload endpoints share
   the limiter (engaged during smoke tests).
 - Donation `updated_at`/filters compare UTC timestamps with local-date query
@@ -92,3 +123,8 @@ clothing 41.8 % of test images have train near-duplicates).
   caveats (rice 100 %, clothing 41.8 %) — never cite them as real-world
   donation accuracy.
 - Password reset is design-only (see `ARCHITECTURE.md`).
+- Notification ordering relies on the `seq` tie-breaker (added in M4);
+  historical rows created before it are backfilled by row order.
+- Concurrent acceptance is verified via sequentialized status-guard tests
+  (second writer always 409s); true parallel-writer behaviour is protected by
+  the same conditional UPDATE pattern and SQLite/Postgres write locking.

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
 )
@@ -28,6 +29,8 @@ class Notification(Base):
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Monotonic per-user sequence — stable tie-breaker for list ordering.
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_demo_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[created_at_column] = created_at_column()  # type: ignore[valid-type]
 
@@ -53,10 +56,12 @@ class PaymentRecord(Base):
     organization_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("organizations.id"), nullable=False
     )
+    donation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     transaction_reference: Mapped[str] = mapped_column(String(40), nullable=False)
     receipt_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(25), nullable=False, default="submitted_unverified")
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=True
     )

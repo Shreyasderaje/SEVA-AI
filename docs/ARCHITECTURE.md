@@ -68,8 +68,53 @@ root), random UUID names, magic-byte validation:
 Eligibility filter → five weighted factors → deterministic tie-break
 (score desc, need created_at asc, organization id asc). Weights and service
 radius come from the `settings` table with code fallback. The API exposes it
-read-only via `GET /api/donations/{id}/matches`; offers are created only from
-M4.
+read-only via `GET /api/donations/{id}/matches`; the offer layer (M4) consumes
+it and never duplicates scoring logic.
+
+## Offer workflow (M4)
+
+`app/services/offers.py` — sequential selection per addendum §9:
+
+1. `initiate_offer` re-runs the matching engine and picks the highest-ranked
+   candidate that has no prior offer for the donation (a decliner is never
+   re-offered). While an offer is `sent`, re-initiation is a no-op.
+2. Initiation into `offered` is guarded by a conditional donation UPDATE
+   (pending → offered); a decline selects the next candidate with the
+   donation remaining `offered` (no duplicate history rows).
+3. `accept_offer` atomically performs conditional updates on BOTH the offer
+   (sent → accepted) and the donation (offered → accepted); any racing
+   decline/accept loses with a 409.
+4. When no candidate remains: any lingering active offer is withdrawn, the
+   donation returns to `pending`, and the donor is notified.
+5. Matching score, factors, weights, distance, and reasons are snapshotted
+   into `donation_offers.factor_json` at send time and never recomputed.
+
+**Ordering integrity:** status-history rows and notifications carry a
+monotonic per-scope `seq` (migration `b7e2a94c6f10`) because `created_at` has
+second-level precision on some platforms — `ORDER BY created_at, seq` is
+therefore deterministic. History rows are written BEFORE the bulk status
+UPDATEs (which synchronize the ORM identity map — writing them after would
+trip the dedupe guard and silently drop the row).
+
+## Pickup and completion (M4)
+
+`app/services/pickup.py` — `accepted → pickup_scheduled → picked_up →
+completed`, all transitions server-side. Completion records the ACTUAL
+`quantity_received` (validated > 0 and ≤ donated quantity), updates the
+linked need inside the same transaction via a conditional UPDATE with
+`delta = min(received, remaining)` (never over-fulfils; CHECK constraint
+backs it), auto-marks the need `fulfilled`, and is idempotent: a repeated
+completion hits the donation status guard and fails with 409.
+
+## Payments (M4 §9 — manual verification only)
+
+No gateway, no automatic verification. Organizations submit UPI ID + optional
+QR image (verified orgs only) → `pending_approval` → admin approve/reject →
+`approved` UPI details become visible to donors on accepted donations.
+Donors submit a transaction reference (6–40 alnum) + optional receipt;
+status stays `submitted_unverified` until an admin verifies or rejects with
+a reason. Payment decisions never change donation status. Receipts and QR
+images live outside the web root and are served only to their owners/admins.
 
 ## Backups
 

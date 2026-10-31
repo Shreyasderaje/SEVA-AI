@@ -6,11 +6,12 @@ record; a decline never rejections the whole donation. Offer statuses exclude
 on the accepted offer (addendum correction #5).
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -58,6 +59,12 @@ class DonationOffer(Base):
     # Actual quantity received, validated > 0 and <= quantity offered (addendum §5).
     quantity_received: Mapped[float | None] = mapped_column(Float, nullable=True)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # M4: the organization's confirmed pickup plan (donor's preferred window
+    # lives on `donations`).
+    pickup_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    pickup_window_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pickup_window_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pickup_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_demo_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[created_at_column] = created_at_column()  # type: ignore[valid-type]
     updated_at: Mapped[updated_at_column] = updated_at_column()  # type: ignore[valid-type]
@@ -84,5 +91,8 @@ class DonationStatusHistory(Base):
     from_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     to_status: Mapped[str] = mapped_column(String(20), nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Monotonic per-donation sequence: created_at has second precision on some
+    # platforms, so the timeline needs a stable tie-breaker.
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_demo_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[created_at_column] = created_at_column()  # type: ignore[valid-type]

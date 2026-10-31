@@ -20,7 +20,10 @@ from app.api import (
     health,
     images,
     needs,
+    notifications,
+    offers,
     organizations,
+    payments,
 )
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
@@ -88,6 +91,9 @@ def create_app() -> FastAPI:
     app.include_router(classify.router)
     app.include_router(organizations.router)
     app.include_router(needs.router)
+    app.include_router(offers.router)
+    app.include_router(notifications.router)
+    app.include_router(payments.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):

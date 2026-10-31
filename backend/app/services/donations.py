@@ -43,6 +43,11 @@ def record_status_transition(
     """
     if donation.status == to_status:
         return False
+    next_seq = db.scalar(
+        select(func.coalesce(func.max(DonationStatusHistory.seq), 0)).where(
+            DonationStatusHistory.donation_id == donation.id
+        )
+    ) or 0
     db.add(
         DonationStatusHistory(
             donation_id=donation.id,
@@ -50,6 +55,7 @@ def record_status_transition(
             from_status=donation.status,
             to_status=to_status,
             note=note[:500] if note else None,
+            seq=next_seq + 1,
         )
     )
     donation.status = to_status
