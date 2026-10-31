@@ -384,3 +384,104 @@ build clean. Files changed by the audit: documentation only
 `docs/AI_ML_METHODOLOGY.md`, `docs/BUILD_LOG.md`) plus the regenerated OFF
 `_attribution.csv` (gitignored dataset metadata).
 
+---
+
+## Milestone M3 — Needs and Matching (2026-11-01)
+
+Git state verified before starting: `main` at `4aca0e3`, clean tree. All
+M1/M2/Stage-1 commits untouched; no history rewritten.
+
+### Built
+
+**Organizations (application + verification)**
+- `POST /api/organizations/apply` (org role, once per account, multipart):
+  name/type/description/address/contacts/representative + coordinates only
+  with consent (range-validated) + verification document (PDF/JPEG/PNG,
+  magic-byte checked, ≤10 MB, UUID name, stored outside the web root). A 422
+  on the document leaves no application row and no orphan file.
+- `GET /api/organizations/me` + `GET /api/organizations/{id}/verification-document`
+  (owner or admin only; 404 for others — no existence leak).
+- Admin: `GET /api/organizations/admin/all` (status filter, pagination),
+  `GET /admin/{id}` (details + authorized document URL),
+  `POST /admin/{id}/verify|reject|suspend` — reject/suspend require a reason;
+  every decision audited (`organization.verify|rejected|suspended` with
+  previous→new status).
+- Public: `GET /api/organizations` (verified only, no contact details) and
+  `GET /api/organizations/{id}/public-needs` (active needs of a verified org).
+
+**Needs (verified organizations only)**
+- `POST /api/needs`, `GET /api/needs/mine`, `GET/PATCH /api/needs/{id}`,
+  `POST /api/needs/{id}/status` (active⇄paused, →closed terminal),
+  `POST /api/needs/{id}/fulfilment` (race-safe conditional UPDATE —
+  over-fulfilment impossible; auto-`fulfilled` at the target, audited),
+  `GET /api/needs/public` (guest-accessible active needs of verified orgs).
+- Remaining quantity computed server-side; CHECK constraints bound
+  fulfilled ≤ required; subcategory must belong to the need's category.
+
+**Matching engine (`app/services/matching.py`)** — rule-based, deterministic,
+no ML: eligibility filter with reason codes (`organization_not_verified`,
+`no_active_need`, `need_not_active`, `need_fully_funded`,
+`category_incompatible`, `outside_service_radius`) → five weighted factors
+(compatibility 0.30 exact/0.5 related, urgency 0.25, Haversine distance 0.20
+with neutral 0.5 + explicit "Distance could not be calculated." when missing,
+quantity_fit 0.15, timeliness 0.10) → deterministic order (score desc, need
+created_at asc, organization id asc). Weights/radius from the `settings`
+table with approved defaults. Client AI fields never consulted. Exposed
+read-only via `GET /api/donations/{id}/matches` (owner donor or admin);
+no offers created in M3.
+
+**Frontend**
+- Organization: application form (`/organization/apply`), dashboard with
+  verification banner + needs management (create via `/organization/needs/new`,
+  edit, pause/resume/close, fulfilment dialog with remaining-quantity display).
+- Admin: applications list with status filter (`/admin/organizations`), review
+  page (`/admin/organizations/:id`) with authorized document link and
+  approve/reject/suspend dialogs (reason required for reject/suspend).
+- Donor: `DonationMatches` component on pending donation details — ranked
+  organizations, verified badges, per-factor score×weight breakdown, reasons,
+  distance (or the explicit fallback sentence), meaningful empty state with
+  exclusion summary.
+- Public directory `/organizations` (closes the M1-deferred "Find
+  organizations" CTA) + public needs display.
+
+### Database changes
+
+- `3cb71d79fa42`: `organizations.description`,
+  `organization_needs.subcategory_id` (FK).
+- `a7c31f9d21b4`: **defect fix** — `organization_documents.uploaded_at` had a
+  string server default (`'CURRENT_TIMESTAMP'` stored as TEXT, rows unreadable);
+  replaced with the SQL keyword via batch alter + defensive row repair.
+  Discovered by the new M3 tests; the table was never read by M1/M2.
+- `create_admin.py` now seeds the related-category compatibility pairs
+  (packaged_food↔grains_rice, clothing↔other, utensils↔other, both directions).
+
+### Defects found and fixed during M3
+
+1. `organization_documents.uploaded_at` string server default (migration
+   `a7c31f9d21b4`) — latent M1 schema bug surfaced by M3 tests.
+2. M2 `test_list_date_range_filter` timezone flake: local-date filters vs UTC
+   `created_at` broke between local midnight and 05:30 — test anchored at
+   yesterday (filter semantics unchanged, UTC storage is correct).
+
+### Commands and results
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `pytest` | **104 passed** (62 preserved + 42 new) |
+| Frontend tests | `npm test` | **38 passed** (14 M1 + 13 M2 + 11 M3) |
+| Production build | `npm run build` | clean (454.4 kB JS / 20.6 kB CSS) |
+| Migration check | `alembic upgrade head` (002, 003) + column/DDL verification | OK |
+| API smoke | `scripts/smoke_m3.py` | ALL PASSED — invalid doc 422, apply 201, unverified block 403, doc authz (owner/admin 200, donor 404), verify 200, need 201, matches (score 92.0, distance 1.2 km, 5 factors, reasons, determinism), fulfil → auto-fulfilled → excluded, public endpoints |
+
+### Known limitations / notes
+
+1. No offers, notifications, pickup/completion, or payments — M4 scope.
+2. Admin cannot manually adjust `quantity_fulfilled` (org fulfilment endpoint
+   only); M4 wires offers/completion to fulfilment.
+3. Matching is O(orgs × needs) in Python — fine for MVP scale; the public
+   needs listing caps at 100 rows.
+4. Needs list endpoints are authenticated (owner/admin); public exposure is
+   the dedicated `/api/needs/public`.
+5. The timeliness factor treats overdue required-by dates as fully urgent
+   (documented in `AI_ML_METHODOLOGY.md`).
+

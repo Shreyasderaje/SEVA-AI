@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.common import created_at_column, new_uuid, updated_at_column
@@ -36,6 +36,7 @@ class Organization(Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     org_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -65,6 +66,6 @@ class OrganizationDocument(Base):
     document_type: Mapped[str] = mapped_column(String(40), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(255), nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default="CURRENT_TIMESTAMP"
+        DateTime, nullable=False, server_default=func.now()
     )
     is_demo_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

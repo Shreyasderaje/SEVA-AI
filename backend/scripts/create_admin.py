@@ -75,6 +75,29 @@ def seed_categories(db) -> dict[str, object]:
                     donation_category_id=row.id, need_category_id=row.id, factor="exact"
                 )
             )
+    # Related-category allowances (matching factor 0.5) — documented in
+    # docs/AI_ML_METHODOLOGY.md.
+    related_pairs = [
+        ("packaged_food", "grains_rice"),
+        ("grains_rice", "packaged_food"),
+        ("clothing", "other"),
+        ("other", "clothing"),
+        ("utensils", "other"),
+        ("other", "utensils"),
+    ]
+    for donation_code, need_code in related_pairs:
+        donation_cat = categories[donation_code]
+        need_cat = categories[need_code]
+        exists = db.get(DonationCompatibility, (donation_cat.id, need_cat.id))
+        if exists is None:
+            db.add(
+                DonationCompatibility(
+                    donation_category_id=donation_cat.id,
+                    need_category_id=need_cat.id,
+                    factor="related",
+                )
+            )
+            print(f"  donation_compatibility: {donation_code} -> {need_code} (related)")
     return categories
 
 

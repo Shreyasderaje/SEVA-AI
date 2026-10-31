@@ -360,12 +360,15 @@ def test_list_date_range_filter(client, donor_token):
     create_donation(client, donor_token, title="DateFilter jacket")
     import datetime as dt
 
-    today = dt.date.today().isoformat()
+    # created_at is stored in UTC while the filter takes local dates, so a
+    # donation made just before local midnight can carry a UTC date one day
+    # earlier: anchor the inclusive bound at yesterday to stay robust.
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
     tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
 
     included = client.get(
         "/api/donations",
-        params={"date_from": today, "q": "DateFilter"},
+        params={"date_from": yesterday, "q": "DateFilter"},
         headers={"Authorization": f"Bearer {donor_token}"},
     )
     assert included.json()["total"] >= 1

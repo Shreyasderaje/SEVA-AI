@@ -8,10 +8,13 @@ organizations publish their current needs. The system classifies donated-item ph
 broad categories (transfer learning) and recommends suitable organizations using a
 transparent, explainable, rule-based matching formula.
 
-> **Status: Milestone M1 (Foundation) in progress.** Auth, database schema, and app shell
-> are being built. Donations, matching, offers, notifications, and payments arrive in
-> later milestones. This README grows with the project; full setup/demo instructions land
-> in M5.
+> **Status: Milestone M3 complete (Needs and Matching).** Delivered so far:
+> accounts/RBAC (M1), donations + image classification with the honest
+> `model_not_configured` fallback (M2 + Stage-1 public-dataset classifier),
+> organization applications and admin verification, needs management with
+> fulfilment tracking, and the explainable rule-based donation matching engine
+> (M3). Offers, notifications, pickup/completion, and payments are later
+> milestones. This README grows with the project.
 
 ## Tech stack
 
@@ -82,6 +85,20 @@ Both environments use the same `backend/.env`, database, and migrations; the
 fallback behaviour never changes — if the weights file is missing, the ML
 environment also reports `model_not_configured`. The standard `pytest` suite
 runs in the PyTorch-free environment and keeps that contract tested.
+
+## What exists (after M3)
+
+- **Donors** register, create donations with 1–3 photos (AI category
+  suggestion or manual choice), view explainable organization matches with
+  per-factor scores, and track donation timelines.
+- **Organizations** apply with a verification document, get verified by an
+  admin, then publish and manage needs (quantities, urgency, fulfilment
+  tracking).
+- **Admins** review applications (authorized document access), approve/reject
+  with audited reasons, and manage users.
+- **Matching** is a deterministic, rule-based scoring engine — never machine
+  learning — with published weights, Haversine distance, a 50 km service
+  radius, neutral distance fallback, and human-readable explanations.
 
 ### Frontend
 

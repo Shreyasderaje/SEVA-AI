@@ -31,6 +31,7 @@ from app.core.deps import require_roles
 from app.core.rate_limit import limiter
 from app.models.donation import Donation, DonationCategory, DonationImage, DonationSubcategory
 from app.models.offer import DonationStatusHistory
+from app.models.user import User
 from app.schemas.common import Page
 from app.schemas.donation import (
     DonationDetailOut,
@@ -377,3 +378,26 @@ def cancel_donation(
 
 def _can_view(user, donation: Donation) -> bool:
     return user.role == ROLE_ADMIN or donation.donor_id == user.id
+
+
+@router.get("/{donation_id}/matches")
+def donation_matches(
+    donation_id: str,
+    user: User = Depends(require_roles(ROLE_DONOR, ROLE_ADMIN)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Explainable eligibility + ranking for this donation (§6.4).
+
+    Read-only: the offer workflow belongs to M4. Scoring uses the
+    donor-confirmed category from the database; client-supplied AI fields are
+    never consulted.
+    """
+    donation = db.get(Donation, donation_id)
+    if donation is None or not _can_view(user, donation):
+        raise HTTPException(404, "Donation not found")
+    from app.services.matching import MatchingInputError, compute_matches
+
+    try:
+        return compute_matches(db, donation)
+    except MatchingInputError as exc:
+        raise HTTPException(409, str(exc)) from exc

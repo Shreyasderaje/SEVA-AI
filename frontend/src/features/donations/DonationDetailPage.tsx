@@ -26,6 +26,7 @@ import {
 import { Skeleton } from "@/components/ui/form-controls";
 import { ApiError } from "@/lib/api";
 import { cancelDonation, getDonation } from "@/lib/donation-api";
+import { DonationMatches } from "@/features/donations/DonationMatches";
 import type { DonationDetail, DonationStatus } from "@/types/donations";
 
 const STATUS_VARIANTS: Record<DonationStatus, "warning" | "success" | "secondary" | "destructive" | "muted"> = {
@@ -239,6 +240,9 @@ export function DonationDetailPage() {
           </ol>
         </CardContent>
       </Card>
+
+      {/* Explainable matching (M3) — shown while the donation is unmatched */}
+      {donation.status === "pending" && <DonationMatches donationId={donation.id} />}
 
       {/* Cancel confirmation */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

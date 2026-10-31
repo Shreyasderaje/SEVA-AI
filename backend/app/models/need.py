@@ -12,7 +12,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.common import created_at_column, new_uuid, updated_at_column
 from app.models.base import Base
@@ -48,6 +48,11 @@ class OrganizationNeed(Base):
     category_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("donation_categories.id"), nullable=False
     )
+    subcategory_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("donation_subcategories.id"), nullable=True
+    )
+    subcategory: Mapped["DonationSubcategory | None"] = relationship()
+    category: Mapped["DonationCategory"] = relationship("DonationCategory")
     title: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -60,3 +65,10 @@ class OrganizationNeed(Base):
     is_demo_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[created_at_column] = created_at_column()  # type: ignore[valid-type]
     updated_at: Mapped[updated_at_column] = updated_at_column()  # type: ignore[valid-type]
+
+    organization: Mapped["Organization"] = relationship()  # noqa: F821 — defined in organization.py
+
+    @property
+    def remaining_quantity(self) -> float:
+        """Required minus fulfilled; never negative (check constraint bounds both)."""
+        return max(0.0, (self.quantity_required or 0.0) - (self.quantity_fulfilled or 0.0))

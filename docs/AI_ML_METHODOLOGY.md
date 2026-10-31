@@ -180,18 +180,62 @@ compare against this baseline.
 
 The donation-to-organization matching engine is a **deterministic, rule-based
 scoring formula** — it is not a trained model and must never be described as
-machine learning in the UI or documentation.
+machine learning in the UI or documentation. Implemented in M3 in
+`backend/app/services/matching.py` (single source of truth — no scoring logic
+in routers or frontend).
 
-_Implemented in milestone M3; the formula, weights, factor definitions, unit
-compatibility table, and determinism tests will be documented here then._
+### Eligibility filter (before any scoring)
 
-### Unit compatibility (normative for M3)
+An organization is excluded, with a reason code, when any of the following
+holds: `organization_not_verified` (pending/rejected/suspended);
+`no_active_need` / `need_not_active` (paused or closed) / `need_fully_funded`
+(remaining ≤ 0); `category_incompatible` (need category not exact/related to
+the donor-confirmed donation category); `outside_service_radius` (valid
+Haversine distance > configured radius, default 50 km).
 
-Donation units and need units must match directly for a candidate need to be
-eligible; quantities are never silently converted between units in this
-release. Compatible set: `kg` ↔ `kg`, `pieces` ↔ `pieces`, `packets` ↔
-`packets`, `sets` ↔ `sets`, `litres` ↔ `litres`. (A documented compatibility
-table with related-category allowances ships with M3.)
+### Factors and weights (approved; stored in the `settings` table)
+
+| Factor | Weight | Definition |
+|---|---:|---|
+| compatibility | 0.30 | 1.0 exact category; 0.5 allowed related category (see table); otherwise ineligible |
+| urgency | 0.25 | low 0.25, medium 0.5, high 0.75, critical 1.0 |
+| distance | 0.20 | `max(0, 1 − distance_km / service_radius_km)`; **0.5 neutral when coordinates are missing or invalid** |
+| quantity_fit | 0.15 | `min(donation_qty, remaining) / max(donation_qty, remaining)` |
+| timeliness | 0.10 | 1.0 if required-by ≤ 14 days (overdue counts as urgent); linear decay to 0.2 at ≥ 60 days; 0.5 without a date |
+
+Overall score = Σ(weight × factor), displayed 0–100 with one decimal.
+
+### Distance rules (addendum §6)
+
+- Haversine formula, Earth radius 6371 km, when BOTH coordinate pairs are
+  present and in range (donation coordinates only exist with explicit donor
+  consent).
+- Exclude only when a valid computed distance exceeds the service radius.
+- Otherwise neutral 0.5 with the explicit explanation **"Distance could not be
+  calculated."** — never fabricate coordinates or distances.
+
+### Determinism
+
+Ordering: score descending → need `created_at` ascending → organization id
+ascending. Identical inputs and settings always produce an identical ranking
+(covered by a dedicated test). Tie-breaking example: two identical needs rank
+by creation time, stably across runs.
+
+### Category compatibility table (as seeded)
+
+Exact (1.0): every class with itself. Related (0.5, both directions):
+`packaged_food ↔ grains_rice`, `clothing ↔ other`, `utensils ↔ other`.
+Units are never converted: a need is eligible only when its unit equals the
+donation's unit (`kg/pieces/packets/sets/litres`).
+
+### Explanations
+
+Each candidate returns human-readable reasons derived from the actual factor
+values, e.g. *"Verified organization with an active need for clothing. Need
+urgency is critical. About 1.2 km away from the pickup area. Offered quantity
+fits the remaining need of 30 pieces. Required by 2026-11-06 — within 14
+days."* — or the explicit distance-fallback sentence. Client-supplied fields
+(including AI predictions) never influence eligibility or ranking.
 
 ### Acceptance-prediction extension (optional, §9.4)
 

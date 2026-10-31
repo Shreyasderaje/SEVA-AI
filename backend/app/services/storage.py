@@ -25,11 +25,28 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per donation image (§6.5)
 MAX_IMAGE_DIMENSION = 1600  # resized long edge; also guarantees EXIF removal via re-encode
 JPEG_QUALITY = 85
 
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024  # 10 MB per verification document (addendum §8)
+
 # magic-number signatures → canonical MIME we accept for donation images
 IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
     (b"\xff\xd8\xff", "image/jpeg"),
     (b"\x89PNG\r\n\x1a\n", "image/png"),
 )
+
+# Verification documents: PDF, JPEG, PNG only (addendum §8).
+DOCUMENT_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"%PDF", "application/pdf"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+)
+
+
+def detect_document_mime(data: bytes) -> str | None:
+    """MIME implied by magic bytes for verification documents, or None."""
+    for signature, mime in DOCUMENT_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    return None
 
 
 @dataclass
@@ -123,3 +140,37 @@ async def read_upload(upload: UploadFile, *, max_bytes: int, label: str) -> byte
     if len(data) > max_bytes:
         raise HTTPException(422, f"{label} must be {max_bytes // (1024 * 1024)} MB or smaller")
     return data
+
+
+async def save_verification_document(upload: UploadFile, organization_id: str) -> StoredImage:
+    """Validate and store one verification document (addendum §8).
+
+    PDF/JPEG/PNG only, magic-byte checked, ≤ 10 MB, stored under a generated
+    UUID name outside the web root. Documents are NOT re-encoded (a PDF must
+    stay a PDF); image documents keep their validated bytes as-is.
+    """
+    import hashlib
+
+    data = await upload.read()
+    if len(data) == 0:
+        raise HTTPException(422, "The uploaded document is empty")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(422, "Verification documents must be 10 MB or smaller")
+    mime = detect_document_mime(data)
+    if mime is None:
+        raise HTTPException(
+            422, "Unsupported document type. Upload a PDF, JPEG, or PNG file."
+        )
+
+    extension = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png"}[mime]
+    relative = Path("verification") / organization_id / f"{uuid.uuid4().hex}{extension}"
+    destination = storage_root() / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(data)
+
+    return StoredImage(
+        stored_path=relative.as_posix(),
+        mime_type=mime,
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )

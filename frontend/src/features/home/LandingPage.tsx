@@ -72,11 +72,11 @@ export function LandingPage() {
               <Link to={donateTarget}>Donate items</Link>
             </Button>
             <Button asChild size="lg" variant="outline">
-              <Link to="/login">Sign in</Link>
+              <Link to="/organizations">Find organizations</Link>
             </Button>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            The verified organization directory arrives with milestone M3.
+            Browse the verified organization directory — no account needed.
           </p>
         </div>
       </section>
