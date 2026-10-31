@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+coverage/
+
+# Env & secrets (never commit)
+.env
+*.local
+
+# Databases
+*.db
+*.sqlite3
+
+# Uploads / generated files
+backend/storage/*
+!backend/storage/.gitkeep
+
+# ML artifacts (never commit model weights or consented data)
+ml/data/raw/*
+!ml/data/raw/.gitkeep
+ml/data/processed/*
+!ml/data/processed/.gitkeep
+ml/models/*.pt
+ml/models/*.pth
+
+# OS / editor
+.DS_Store
+Thumbs.db
