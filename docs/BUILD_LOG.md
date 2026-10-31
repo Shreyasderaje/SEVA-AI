@@ -306,3 +306,81 @@ build clean (415.5 kB JS). M1/M2 functionality and API contracts untouched
    → re-run prepare (`--force`) → train a new version → evaluate → compare in
    reports; previous model stays registered for rollback.
 
+---
+
+## Stage 1 review audit (2026-10-31) — read-only verification before M3
+
+Five checks requested by the reviewer. No retraining, no split changes, no
+application-code changes, no M3 work.
+
+**1. Rice dataset leakage — MEASURED, material.** Re-analysis (average hash,
+Hamming ≤ 4, the pipeline's own criterion) found that **100 % of rice test
+images (163/163) have a near-duplicate in the train split**; clothing 41.8 %
+(92/220) and utensils 15.0 % (33/220) also leak; packaged_food 2.2 % and
+other 3.1 % are near-clean. Root cause: the Koklu source is one augmented
+family per variety (filenames are bulk counters 1–15,000 with no family
+marker), the near-duplicate grouping detected the giant family, and the
+>25 %-of-class dissolution rule split it across splits; clothing/utensils
+leakage comes from near-duplicate pairs across different duplicate groups
+(visually recurrent studio/encyclopedic imagery). **The grains_rice F1 1.0000
+and the other affected per-class numbers are potentially optimistic and are
+now labelled as such in `docs/AI_ML_METHODOLOGY.md`, together with the full
+leakage table.** The reported metrics are preserved unchanged as the
+historical Stage-1 baseline. Recommended (not applied): full transitive
+near-dup clustering + atomic families + per-family down-sampling in the next
+dataset version; obtain non-augmented rice originals from upstream if
+possible.
+
+**2. Open Food Facts 697 vs 897 reconciled; provenance gap found and repaired.**
+The final dataset contains **897** OFF images from two runs: run 1 saved 497
+(public API then rate-limited), the top-up saved 400 new. The top-up's sidecar
+overwrote run 1's rows and re-encountered only 297 of run 1's codes (OFF API
+ordering shifts between calls) → **200 files lacked per-image attribution**
+(the distribution report's 897 is the true on-disk count; the "697" was run
+2's handled-count). Repair (dataset metadata only — no code, model, or split
+changes): an OFF filename **is** the product code, so `_attribution.csv` was
+regenerated deterministically with per-product source URLs for all files.
+Verified after repair: **897/897 files have attribution rows with per-product
+URLs; every `labels.csv` OFF row traces to an existing raw file and sidecar
+row (0 failures).** Earlier-run images confirmed as genuine OFF product photos
+with the same group licence.
+
+**3. Original rice licence verified upstream.** The Hugging Face mirror
+(`miladfa7/Rice-Image-Dataset`) carries no licence tag of its own. Upstream
+evidence: the authors' official distribution
+(`kaggle.com/datasets/muratkokludataset/rice-image-dataset`, owner
+`muratokludataset`) states **"CC0: Public Domain"**; the dataset is documented
+by the authors' paper (Koklu, Cinar & Taspinar 2021, Computers and Electronics
+in Agriculture, S0168169921003021). Several search-suggested Mendeley DOIs
+were checked and do NOT resolve (404) — they are recorded as unreliable. The
+IMAGE licence (CC0) is explicitly distinct from any repository CODE licence
+(e.g. Apache/MIT files in analysis repos do not govern the images).
+Attribution/redistribution requirements for every source are documented in
+`ml/data/README.md` (CC0 needs none but the paper is cited anyway; CC BY 4.0
+attribution via the registry; CC-BY-SA per-photo credit via `_attribution.csv`).
+
+**4. Runtime instructions verified and documented.** `ml/.venv` contains the
+backend requirements PLUS torch (verified importable) — launching
+`cd backend && ../ml/.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
+serves the trained classifier (this exact command was used for the live
+five-class API test). The standard `backend/.venv` is **intentionally
+PyTorch-free** (verified: `import torch` fails there) →
+`model_not_configured`; all contracts unchanged. README now explains both
+environments in a dedicated subsection.
+
+**5. Frontend test count discrepancy explained — no test harmed.** Git
+history: commit `19b99aa` (M1) contains exactly **14** frontend tests
+(route-guards 5, login 4, register 5); the same three files at HEAD still
+contain exactly 5+4+5 with an empty test-case diff — no deletion, weakening,
+or replacement. M2 added 13 new tests (create-donation 9 + donor dashboard 4)
+→ 27 total. The M2 report's "13 M1 + 14 M2" was a transposed-typing error;
+correct statement: **14 preserved M1 tests + 13 new M2 tests = 27**.
+
+### Post-audit verification
+
+Backend `pytest` **62 passed** · frontend `vitest` **27 passed** · production
+build clean. Files changed by the audit: documentation only
+(`README.md`, `ml/README.md`, `ml/data/README.md`,
+`docs/AI_ML_METHODOLOGY.md`, `docs/BUILD_LOG.md`) plus the regenerated OFF
+`_attribution.csv` (gitignored dataset metadata).
+

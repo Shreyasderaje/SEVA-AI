@@ -66,6 +66,10 @@ cd backend && ../ml/.venv/Scripts/python.exe ../ml/src/evaluate_image_classifier
 
 # 5. The backend loads the weights via CLASSIFIER_WEIGHTS_PATH
 #    (default ../ml/models/image_classifier_v1.pt — already configured).
+#    Launch the backend FROM the ML environment so torch is available:
+cd backend && ../ml/.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000
+#    (the standard backend/.venv is PyTorch-free and honestly reports
+#     model_not_configured — see README.md for the two-environment table)
 
 # CLI inference:
 ml/.venv/Scripts/python.exe ml/src/predict_image.py path/to/image.jpg

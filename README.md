@@ -61,6 +61,28 @@ uvicorn app.main:app --reload --port 8000
 
 API docs: http://localhost:8000/docs — health check: http://localhost:8000/api/health
 
+### Running the backend WITH the trained classifier
+
+There are two intentionally different backend environments:
+
+| Environment | What it is | Classify endpoint behaviour |
+|---|---|---|
+| `backend/.venv` (standard) | **PyTorch-free** by design — small install, runs everything except inference | `POST /api/classify` returns `{"status": "model_not_configured"}`; donors choose the category manually (a first-class workflow) |
+| `ml/.venv` (ML environment) | backend requirements **plus** torch/torchvision CPU | loads the trained weights from `CLASSIFIER_WEIGHTS_PATH` and returns real predictions |
+
+To serve the trained classifier, launch the backend from the ML environment
+(from the repository root):
+
+```bash
+cd backend
+../ml/.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000
+```
+
+Both environments use the same `backend/.env`, database, and migrations; the
+fallback behaviour never changes — if the weights file is missing, the ML
+environment also reports `model_not_configured`. The standard `pytest` suite
+runs in the PyTorch-free environment and keeps that contract tested.
+
 ### Frontend
 
 ```bash

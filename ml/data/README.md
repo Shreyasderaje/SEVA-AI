@@ -25,9 +25,23 @@ ml/data/raw/
 | source_group | Source | Licence (as stated by the host) | Fetcher |
 |---|---|---|---|
 | `aig_mendeley` | Apparel Images Gallery (AIG), Mendeley Data v1 — 130,014 images, 13 garment classes, 224×224 | **CC BY 4.0** (dataset page) | direct: `https://data.mendeley.com/public-files/datasets/pxkbgkydrp/files/4a7549a3-8034-455f-b580-2407d26bcb18/file_downloaded` (879 MB RAR; extract with `/c/Windows/System32/tar.exe -xf`) |
-| `rice_koklu` | Rice Image Dataset — Koklu, Cinar & Taspinar (2021), "Classification of rice varieties with deep learning methods", Computers and Electronics in Agriculture; 75,000 grain images, 5 varieties (Arborio, Basmati, Ipsala, Jasmine, Karacadag) | **CC BY 4.0** (upstream); fetched from the Hugging Face mirror `miladfa7/Rice-Image-Dataset` (230 MB ZIP) | mirror: `https://huggingface.co/datasets/miladfa7/Rice-Image-Dataset/resolve/main/Rice%20Image%20Dataset.zip` |
+| `rice_koklu` | Rice Image Dataset — Koklu, Cinar & Taspinar (2021), "Classification of rice varieties with deep learning methods", Computers and Electronics in Agriculture; 75,000 grain images, 5 varieties (Arborio, Basmati, Ipsala, Jasmine, Karacadag) | **CC0: Public Domain** — as stated on the authors' official distribution (`kaggle.com/datasets/muratkokludataset/rice-image-dataset`, owner `muratokludataset`); the Hugging Face mirror used for download carries no licence tag of its own, so the authors' upstream statement governs. Note: the image dataset licence is independent of any repository CODE licence (e.g. analysis repos' Apache/MIT files do not cover the images). Cite the paper regardless of CC0 | mirror: `https://huggingface.co/datasets/miladfa7/Rice-Image-Dataset/resolve/main/Rice%20Image%20Dataset.zip` |
 | `utensils_13k` | Kitchen Utensils Dataset 13K — 10 utensil classes | **MIT** (dataset tag) | `ml/src/fetch_utensils.py` |
 | `openfoodfacts` | Open Food Facts product front photos | **CC-BY-SA / CC0 per upload**, contributor credited per photo | `ml/src/fetch_openfoodfacts.py` |
+
+### Open Food Facts count reconciliation (audit note)
+
+The final dataset contains **897** OFF images, built from two collection runs:
+run 1 saved 497 images (the public API then rate-limited), and the top-up run
+saved 400 new images. The top-up's `_attribution.csv` initially contained only
+its own 697 rows (297 re-encountered + 400 new), leaving 200 run-1 files
+without sidecar rows. Repaired during the Stage-1 audit: the sidecar was
+regenerated deterministically from the filenames — an OFF filename **is** the
+product code, so every image's per-product source URL
+(`https://world.openfoodfacts.org/product/<code>`) is reconstructible without
+any re-download. Verified after repair: 897/897 files have attribution rows
+with per-product URLs, and every `labels.csv` OFF row traces to an existing
+raw file and sidecar row.
 | `wikimedia_other` | Wikimedia Commons — Toys, Dolls, Plush toys, Books, Board games, Children's games, School supplies | **per file**: only CC0 / Public Domain / CC BY / CC BY-SA kept; artist + licence + source URL captured per image | `ml/src/fetch_wikimedia_other.py` |
 
 **Rejections documented:** the candidate "Freiburg Groceries Dataset" could not

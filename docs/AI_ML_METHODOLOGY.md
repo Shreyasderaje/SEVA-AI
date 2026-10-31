@@ -79,7 +79,8 @@ they never become classifier classes and never change model output labels.
 
 Copied verbatim from `ml/reports/image_classifier_v1_metrics.json` /
 `image_classifier_v1_summary.md` (evaluated 2026-10-31, 866 test images,
-touched once, seed 42):
+touched once, seed 42). **These numbers are preserved as the historical
+Stage-1 baseline.**
 
 - **Overall accuracy: 0.9896**
 - Best validation accuracy during training: 0.9909 (frozen-head epoch 7)
@@ -108,6 +109,48 @@ touched once, seed 42):
   row (id `8d0eadce-f8b1-40ec-9748-7d37749ae6f2`, split "test") in the dev
   database. Weights: `ml/models/image_classifier_v1.pt` (gitignored; metadata
   JSON committed).
+
+### Near-duplicate leakage audit (Stage-1 review — read these numbers with the table above)
+
+A Stage-1 audit re-measured cross-split near-duplicate overlap directly
+(64-bit average hash, Hamming ≤ 4 — the same criterion the curation pipeline
+uses). **Share of TEST images that have a near-duplicate inside the TRAIN
+split:**
+
+| Class | Test images | Leaked test images | Share |
+|---|---|---|---|
+| clothing | 220 | 92 | **41.8 %** |
+| grains_rice | 163 | 163 | **100.0 %** |
+| packaged_food | 136 | 3 | 2.2 % |
+| utensils | 220 | 33 | **15.0 %** |
+| other | 127 | 4 | 3.1 % |
+
+Interpretation, stated plainly:
+
+- **The rice result (F1 1.0000) is potentially optimistic — treat it as such.**
+  Every rice test image has a near-identical augmented copy in training. The
+  Koklu dataset is one augmented family per variety (filename numbers are a
+  bulk counter 1–15,000 with no family marker, so families cannot be recovered
+  from names); near-duplicate grouping detected the giant family, and the
+  oversized-group dissolution (>25 % of the class) split it across splits to
+  keep all three splits populated. The leakage is therefore structural for
+  this source, not a one-off.
+- **clothing (41.8 %) and utensils (15.0 %) are also optimistic.** Their
+  leakage comes from near-duplicate pairs in *different* duplicate groups
+  (variants beyond the grouping window, e.g. visually similar studio shots of
+  different garments) — same root cause: these public sources contain
+  many visually recurrent images.
+- **packaged_food (2.2 %) and other (3.1 %) are close to clean.**
+- The numbers above remain the historical Stage-1 baseline (no retraining, no
+  split change was made). Any future claim about classifier quality should
+  cite the per-class numbers TOGETHER with this leakage table.
+
+**Recommended fix for the next dataset version (not applied here):** replace
+the windowed near-duplicate union with full transitive clustering, keep every
+duplicate family atomic, and down-sample oversized families (e.g. ≤ 30 images
+per family) so they fit inside a single split; for rice, prefer obtaining the
+non-augmented originals from upstream. Re-run prepare + train + evaluate and
+compare against this baseline.
 
 ### Limitations (stated plainly)
 
