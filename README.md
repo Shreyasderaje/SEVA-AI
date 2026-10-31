@@ -53,6 +53,9 @@ npm install
 npm run dev                          # http://localhost:5173 (proxies /api to :8000)
 ```
 
+If port 8000 is taken on your machine, run the backend on another port and point the
+proxy at it: `VITE_API_TARGET=http://localhost:8010 npm run dev`.
+
 ### Tests
 
 ```bash

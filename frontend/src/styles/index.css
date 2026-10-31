@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SEVA-AI design tokens — warm off-white surfaces, deep charcoal-navy text,
+   deep teal accent, muted semantic status colours (§8.1). */
+@layer base {
+  :root {
+    --background: 40 25% 98%;
+    --foreground: 222 25% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 25% 12%;
+    --primary: 174 68% 26%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 40 18% 93%;
+    --secondary-foreground: 222 20% 20%;
+    --muted: 40 18% 94%;
+    --muted-foreground: 222 8% 42%;
+    --accent: 42 55% 92%;
+    --accent-foreground: 222 25% 15%;
+    --destructive: 0 70% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 55% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 35 90% 40%;
+    --warning-foreground: 0 0% 100%;
+    --border: 40 14% 87%;
+    --input: 40 14% 84%;
+    --ring: 174 68% 26%;
+    --radius: 0.625rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
