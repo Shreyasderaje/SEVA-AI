@@ -38,6 +38,10 @@ router = APIRouter(prefix="/api/needs", tags=["needs"])
 
 def _serialize(db: Session, need: OrganizationNeed, *, include_org: bool = False) -> NeedOut:
     data = NeedOut.model_validate(need)
+    data.is_demo = need.is_demo_data
+    organization = db.get(Organization, need.organization_id) if include_org else None
+    if include_org and organization is not None:
+        data.is_demo = data.is_demo or organization.is_demo_data
     category = db.get(DonationCategory, need.category_id)
     data.category_code = category.code if category else None
     data.category_display_name = category.display_name if category else None
@@ -45,7 +49,6 @@ def _serialize(db: Session, need: OrganizationNeed, *, include_org: bool = False
         subcategory = db.get(DonationSubcategory, need.subcategory_id)
         data.subcategory_display_name = subcategory.display_name if subcategory else None
     if include_org:
-        organization = db.get(Organization, need.organization_id)
         data.organization_name = organization.name if organization else None
     return data
 

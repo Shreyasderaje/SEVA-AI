@@ -4,6 +4,7 @@ import { AppShell } from "@/app/AppShell";
 import { AccountPage } from "@/features/auth/AccountPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { RegisterPage } from "@/features/auth/RegisterPage";
+import { AdminAnalyticsPage } from "@/features/admin/AdminAnalyticsPage";
 import { AdminOrgDetailPage } from "@/features/admin/AdminOrgDetailPage";
 import { AdminOrgListPage } from "@/features/admin/AdminOrgListPage";
 import { AdminPaymentsPage } from "@/features/admin/AdminPaymentsPage";
@@ -54,6 +55,7 @@ export function AppRoutes() {
           <Route element={<RequireRole roles={["admin"]}>
             <Outlet />
           </RequireRole>}>
+            <Route path="admin" element={<AdminAnalyticsPage />} />
             <Route path="admin/organizations" element={<AdminOrgListPage />} />
             <Route path="admin/organizations/:id" element={<AdminOrgDetailPage />} />
             <Route path="admin/payments" element={<AdminPaymentsPage />} />

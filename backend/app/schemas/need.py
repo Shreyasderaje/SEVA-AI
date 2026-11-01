@@ -29,6 +29,7 @@ class NeedOut(BaseModel):
     required_by: date | None
     status: NeedStatus
     notes: str | None
+    is_demo: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -6,3 +6,13 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
 });
+
+// Recharts (ResponsiveContainer) requires ResizeObserver, which jsdom lacks.
+class ResizeObserverPolyfill {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = ResizeObserverPolyfill as unknown as typeof ResizeObserver;
+}

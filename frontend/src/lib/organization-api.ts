@@ -55,11 +55,13 @@ export function applyOrganization(payload: ApplyPayload): Promise<OrganizationAp
 
 export function adminListOrganizations(params: {
   status?: string;
+  q?: string;
   page?: number;
   page_size?: number;
 }): Promise<Page<AdminOrganizationListItem>> {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
+  if (params.q) query.set("q", params.q);
   query.set("page", String(params.page ?? 1));
   query.set("page_size", String(params.page_size ?? 10));
   return apiFetch<Page<AdminOrganizationListItem>>(

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, Skeleton } from "@/components/ui/form-controls";
+import { Input } from "@/components/ui/input";
 import { adminListOrganizations } from "@/lib/organization-api";
 import type { AdminOrganizationListItem } from "@/types/organizations";
 import type { Page } from "@/types/donations";
@@ -21,15 +22,16 @@ const STATUS_VARIANTS: Record<string, "warning" | "success" | "destructive" | "m
 export function AdminOrgListPage() {
   const [pageData, setPageData] = useState<Page<AdminOrganizationListItem> | null>(null);
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setError(null);
-    adminListOrganizations({ status: status || undefined, page })
+    adminListOrganizations({ status: status || undefined, q: search || undefined, page })
       .then(setPageData)
       .catch(() => setError("Could not load organizations."));
-  }, [page, status]);
+  }, [page, status, search]);
 
   const totalPages = pageData
     ? Math.max(1, Math.ceil(pageData.total / pageData.page_size))
@@ -39,6 +41,19 @@ export function AdminOrgListPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Organizations</h1>
+        <Link to="/admin" className="text-sm font-medium text-primary hover:underline">
+          Analytics
+        </Link>
+        <Input
+          placeholder="Search organizations…"
+          aria-label="Search organizations"
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setPage(1);
+          }}
+          className="max-w-56"
+        />
         <Select
           aria-label="Filter by verification status"
           value={status}

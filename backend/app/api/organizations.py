@@ -207,6 +207,7 @@ def public_needs(
 @router.get("/admin/all", response_model=Page[OrganizationListItem])
 def admin_list_organizations(
     status_filter: str | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None, max_length=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
     user: User = Depends(require_roles(ROLE_ADMIN)),
@@ -219,14 +220,23 @@ def admin_list_organizations(
     if status_filter:
         query = query.where(Organization.verification_status == status_filter)
         count_query = count_query.where(Organization.verification_status == status_filter)
+    if q:
+        pattern = f"%{q.lower()}%"
+        query = query.where(func.lower(Organization.name).like(pattern))
+        count_query = count_query.where(func.lower(Organization.name).like(pattern))
     total = db.scalar(count_query) or 0
     rows = db.scalars(
         query.order_by(Organization.created_at.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
+    items = []
+    for org in rows:
+        item = OrganizationListItem.model_validate(org)
+        item.is_demo = org.is_demo_data
+        items.append(item)
     return Page[OrganizationListItem](
-        items=[OrganizationListItem.model_validate(org) for org in rows],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,

@@ -60,6 +60,7 @@ def initiate(
 
 @router.get("/mine", response_model=Page[dict])
 def my_offers(
+    status_filter: str | None = Query(default=None, alias="status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
     user: User = Depends(require_roles(ROLE_ORGANIZATION)),
@@ -74,6 +75,11 @@ def my_offers(
         .select_from(DonationOffer)
         .where(DonationOffer.organization_id == organization.id)
     )
+    if status_filter:
+        if status_filter not in ("sent", "accepted", "declined", "withdrawn"):
+            raise HTTPException(422, "Unknown offer status filter")
+        base = base.where(DonationOffer.status == status_filter)
+        count_query = count_query.where(DonationOffer.status == status_filter)
     total = db.scalar(count_query) or 0
     rows = db.scalars(
         base.order_by(DonationOffer.created_at.desc())

@@ -66,6 +66,7 @@ class OrganizationListItem(BaseModel):
     name: str
     org_type: str | None
     verification_status: str
+    is_demo: bool = False
     created_at: datetime
 
 
