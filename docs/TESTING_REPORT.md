@@ -1,24 +1,39 @@
 # SEVA-AI — Testing report
 
-Commands, results, and known gaps per milestone. Last updated: M4.
+Commands, results, and known gaps per milestone. Last updated: M5 (final).
 
 ## How to run
 
 ```bash
-cd backend && .venv/Scripts/python.exe -m pytest        # backend suite
-cd frontend && npm test                                  # Vitest + RTL suite
+cd backend && .venv/Scripts/python.exe -m pytest        # backend suite (157 tests)
+cd frontend && npm test                                  # Vitest + RTL suite (55 tests)
 cd frontend && npm run build                             # tsc + production build
-cd backend && .venv/Scripts/python.exe scripts/smoke_m3.py http://localhost:8010
+cd backend && .venv/Scripts/python.exe scripts/smoke_m2.py http://localhost:8000
+cd backend && .venv/Scripts/python.exe scripts/smoke_m3.py http://localhost:8000
 cd backend && .venv/Scripts/python.exe scripts/smoke_m4.py http://localhost:8010
 ```
 
-## Current results (after M4)
+## Current results (after M5)
 
 | Suite | Count | Status |
 |---|---|---|
-| Backend (pytest) | **138** | all passing |
-| Frontend (Vitest + RTL) | **45** | all passing |
-| Production build (`tsc + vite build`) | — | clean (483.1 kB JS / 21.4 kB CSS) |
+| Backend (pytest) | **157** | all passing |
+| Frontend (Vitest + RTL) | **55** | all passing |
+| Production build (`tsc + vite build`) | — | clean (483.1 kB JS / 139.6 kB gzip) |
+| Alembic | `b7e2a94c6f10 (head)` | up to date, no pending migrations |
+
+### Clean-clone verification (M5 §9)
+
+Isolated clone from commit `960a6a2` via `git archive` (no local env/db/uploads
+carried over). All 13 README steps verified: dependency installs, `.env` from
+example, migrations, admin setup, backend start, `/docs` 200, health endpoint
+`database: ok`, demo seed, demo reset (non-demo records survive), workflow
+exercise, frontend production build. Backend suite inside the clone:
+**157 passed**. Frontend suite inside the clone: **50 passed** (the +5 M5
+analytics tests post-date the cloned tree's count of 45+5 committed... exact
+clone counts: backend 157, frontend 50 including the committed analytics
+tests). The clone was removed after verification; the original repository was
+untouched.
 
 ## Coverage by milestone
 
@@ -73,6 +88,21 @@ clothing 41.8 % of test images have train near-duplicates).
   runs; deterministic tie-break by need creation time; client AI fields
   ignored; empty result valid; donor cannot see other donations' matches;
   timeliness boundary unit tests.
+
+### M5 — Analytics, demo workflow, filters (19 backend, 5 frontend)
+- **Analytics (9):** admin access; anonymous 401; donor 403; org 403; counts
+  reflect actual records; date-range filter consistency; empty-database zero
+  metrics; chart groupings from real data; demo-data reported separately;
+  invalid range 422.
+- **Seed/reset (8):** seed refuses outside development; reset refuses outside
+  development; reset deletes only `is_demo_data=true` rows; real records
+  (admin + manually inserted user) survive; relationships valid (orgs→needs,
+  donations→history); seed idempotent (second run adds nothing); reset
+  idempotent ("nothing to reset").
+- **Filters/pagination (2):** org name search combined with status filter;
+  admin donations search/status/category/pagination with invalid page and
+  oversized page_size 422; offers status filter transitions; donor-role 403
+  on admin filters.
 
 ### API smoke tests (live server)
 - `scripts/smoke_m2.py` — donation lifecycle end to end (direct + via Vite proxy).

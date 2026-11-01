@@ -600,3 +600,108 @@ previous commits untouched.
 5. Payment references are opaque strings; no bank integration exists or is
    planned (manual verification only).
 
+---
+
+## Milestone M5 — Analytics, Demo Workflow, Release Polish (2026-11-01)
+
+Git state verified before starting: `main` at `6caef1e`, clean tree. All
+previous commits untouched. Final planned development milestone.
+
+### Built
+
+**Admin analytics overview (`/admin`)**
+- `GET /api/admin/analytics?days=7|30|90|(all)` — admin-only (router-level
+  `require_roles(ROLE_ADMIN)`); anonymous 401, donor/org 403 (tested).
+- 12 database-backed summary cards; weekly donations-over-time line chart;
+  bar charts for donation status, category, org verification, offer outcomes,
+  and needs status — all from live SQL aggregation (no hardcoded values).
+- Consistent date-range filtering across cards/charts where applicable;
+  cumulative metrics (accounts, verification states) shown as totals.
+- Demo-data transparency: `demo_data` breakdown returned separately so the UI
+  badges aggregates containing demo records ("DEMO donations: N").
+- Empty datasets render graceful zero states; division-by-zero safe.
+- Frontend: Recharts line/bar charts in ResponsiveContainers, date-range
+  selector, refresh, skeletons, error state with retry. ResizeObserver
+  polyfill added for jsdom (Vitest).
+
+**Demo seed/reset (`scripts/seed_demo.py`, `scripts/reset_demo.py`)**
+- Both scripts refuse to run unless `SEVA_ENV=development` (printed).
+- Seed (idempotent — stable demo emails/titles as keys): 3 donors, 2 verified
+  + 1 pending "Demo …" organizations with generated demo verification
+  documents, 2 active needs, 3 donations across categories with generated
+  placeholder photos (clearly demo), sequential offers (declined + sent +
+  accepted with full history), notifications, and 2 payment records
+  (submitted + verified). Password `DemoOnlyPass1` is development-only;
+  emails end with `@demo.seva`; every record flagged `is_demo_data=true`.
+- Reset: deletes ONLY `is_demo_data=true` rows, child-first per the actual
+  FK graph, in one transaction (rolled back entirely on failure); prints a
+  per-table summary; confirmation prompt unless `--yes`; safe to re-run;
+  never touches the admin or any real record.
+- Combined demo workflow verified end to end on a dedicated clean database.
+
+**Filters, search, pagination**
+- `GET /api/organizations/admin/all`: `q` name search added (combined with
+  the status filter).
+- `GET /api/admin/donations` (new, read-only): status/category/search/
+  pagination for admin oversight.
+- `GET /api/offers/mine`: status filter.
+- Donor donation history already had status/category/date/search + pagination
+  (M2) — verified unchanged.
+- All list endpoints validate page/page_size (422 on invalid), cap page_size,
+  and return total + pagination metadata.
+
+**UI polish**
+- Admin analytics page (responsive cards/charts, skeleton loaders, error
+  retry, empty states, date-range selector, demo badges).
+- Demo badges: analytics overview, admin organization list (`is_demo` in
+  payloads), offers/needs serializers expose `is_demo`.
+- Admin org list gained a search box; admin nav gained an Analytics link.
+- Existing responsive grid/stack layouts reviewed — no structural rework
+  needed (breakpoints already used across dashboards/forms).
+
+### Documentation
+
+- `README.md` fully rewritten for release: overview, stack, architecture,
+  prerequisites, PowerShell setup for backend/frontend, two-backend-environment
+  table, environment variables, migrations, admin setup, demo seed/reset,
+  tests, production build, API docs, user guide, troubleshooting, limitations.
+- `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TESTING_REPORT.md` updated.
+
+### Clean-clone verification (mandatory §9) — PERFORMED, ALL STEPS PASSED
+
+Isolated clone via `git archive 960a6a2` into a temp directory (no `.env`,
+no databases, no uploads, no venvs carried over). Verified from README
+instructions only:
+
+1. Clone/extract ✓ 2. backend deps install ✓ 3. frontend deps install ✓
+4. `.env` from `.env.example` ✓ 5. `alembic upgrade head` ✓ 6. admin setup ✓
+7. backend starts ✓ 8. frontend build (same pipeline as dev) ✓ 9. `/docs`
+opens (HTTP 200) ✓ 10. health endpoint `database: ok` ✓ 11. demo seed ✓
+12. demo reset (non-demo records survive) ✓ 13. workflows exercised
+(register, categories, donations). Full backend suite re-run inside the
+clone: **157 passed**. Frontend suite in the clone: **50 passed**. The
+original repository was untouched; the clone was removed afterwards.
+
+### Commands and results (main repository)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `pytest` | **157 passed** (138 preserved + 19 new) |
+| Frontend tests | `npm test` | **50 passed** (45 preserved + 5 new) |
+| Production build | `npm run build` | clean (483.1 kB JS / 139.6 kB gzip) |
+| Migrations | `alembic current` = `b7e2a94c6f10 (head)` — no new migrations needed | OK |
+| Demo seed + reset | `scripts/seed_demo.py` + `reset_demo.py --yes` (dev env) | verified idempotent, demo-only deletion |
+| Clean clone | §9 above | all 13 steps passed |
+
+### Known limitations
+
+1. Analytics weekly buckets use ISO weeks of `created_at` (UTC) — the same
+   local-vs-UTC boundary nuance documented for donation filters.
+2. Demo placeholder photos are generated solid-colour JPEGs (clearly demo);
+   real demo photography would improve visual fidelity but adds licensing
+   overhead.
+3. Concurrent-writer analytics are approximate under very heavy writes
+   (aggregations run per request; fine at this project's scale).
+4. All earlier milestone limitations remain (classifier leakage caveats,
+   manual payment verification, in-app notifications only, no auto-expiry).
+

@@ -102,12 +102,17 @@ export function AdminOrgListPage() {
               {pageData.items.map((org) => (
                 <li key={org.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0">
-                    <Link
-                      to={`/admin/organizations/${org.id}`}
-                      className="font-medium hover:underline"
-                    >
-                      {org.name}
-                    </Link>
+                    <p className="flex items-center gap-2">
+                      <Link
+                        to={`/admin/organizations/${org.id}`}
+                        className="font-medium hover:underline"
+                      >
+                        {org.name}
+                      </Link>
+                      {org.is_demo && (
+                        <Badge variant="warning" className="text-[10px]">DEMO</Badge>
+                      )}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {org.org_type ?? "organization"} · applied{" "}
                       {new Date(org.created_at).toLocaleDateString()}

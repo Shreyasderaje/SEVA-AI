@@ -38,6 +38,7 @@ export interface AdminOrganizationListItem {
   name: string;
   org_type: string | null;
   verification_status: VerificationStatus;
+  is_demo: boolean;
   created_at: string;
 }
 
